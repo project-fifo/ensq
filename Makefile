@@ -16,9 +16,12 @@ clean:
 deps:
 	$(REBAR) get-deps
 
+console: compile
+	erl -pa ebin -pa deps/*/ebin -s ensq
+
 APPS = kernel stdlib sasl erts ssl tools os_mon runtime_tools crypto inets \
 	xmerl webtool snmp public_key mnesia eunit syntax_tools compiler
-COMBO_PLT = $(HOME)/.rankmatcher_combo_dialyzer_plt
+COMBO_PLT = $(HOME)/.ensq_combo_dialyzer_plt
 
 check_plt: deps compile
 	dialyzer --check_plt --plt $(COMBO_PLT) --apps $(APPS) \

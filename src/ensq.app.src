@@ -5,8 +5,12 @@
   {registered, []},
   {applications, [
                   kernel,
+                  inets,
                   stdlib
                  ]},
   {mod, { ensq_app, []}},
-  {env, []}
+  {env, [
+         {max_in_flight, 100},
+         {discovery_inteval, 60000}
+        ]}
  ]}.

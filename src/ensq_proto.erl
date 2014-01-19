@@ -28,6 +28,7 @@
 -record(message, {
           timestamp :: non_neg_integer(),
           message_id :: binary(),
+          attempt :: non_neg_integer(),
           message :: binary()
          }).
 
@@ -42,13 +43,15 @@ decode(<<"E_MPUB_FAILED">>) -> {error, mpub_failed};
 decode(<<"E_FIN_FAILED">>) -> {error, fin_failed};
 decode(<<"E_REQ_FAILED">>) -> {error, req_failed};
 decode(<<"CLOSE_WAIT">>) -> close_wait;
-decode(<<Timestamp:64/integer, MsgID:16/binary, Msg>>) ->
+decode(<<Timestamp:64/integer, Attempt:16/integer,
+         MsgID:16/binary, Msg/binary>>) ->
     #message{
        timestamp = Timestamp,
        message_id = MsgID,
+       attempt = Attempt,
        message = Msg
       };
-decode(M) -> {error, unknown_message, M}.
+decode(M) -> {error, unknown, M}.
 
 encode(version) ->
     <<"  V2">>;
@@ -79,7 +82,7 @@ encode({ready, N})
 encode({finish, MsgID})
   when is_binary(MsgID) ->
     <<"FIN ", MsgID/binary, $\n>>;
-encode({re_queue, MsgID, Timeout})
+encode({requeue, MsgID, Timeout})
   when is_binary(MsgID),
        is_integer(Timeout),
        Timeout >= 0 ->
@@ -131,9 +134,9 @@ fin_test() ->
 
 req_test() ->
     Bin = <<"REQ test 0\n">>,
-    ?assertEqual(Bin, encode({re_queue, <<"test">>, 0})),
+    ?assertEqual(Bin, encode({requeue, <<"test">>, 0})),
     Bin1 = <<"REQ test 60\n">>,
-    ?assertEqual(Bin1, encode({re_queue, <<"test">>, 60})).
+    ?assertEqual(Bin1, encode({requeue, <<"test">>, 60})).
 
 touch_test() ->
     Bin = <<"TOUCH test\n">>,
