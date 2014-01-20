@@ -11,9 +11,14 @@
 -behaviour(gen_server).
 
 %% API
--export([get_info/1, list/0, discover/3, discover/4, add_channel/3,
-         start_link/2, tick/1, do_retry/3]).
+-export([get_info/1, list/0,
+         discover/3, discover/4,
+         add_channel/3,
+         send/2,
+         start_link/2]).
 
+%% Internal
+-export([tick/1, do_retry/3]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -31,7 +36,8 @@
           discover_interval = 60000,
           servers = [],
           channels = [],
-          targets = []
+          targets = [],
+          targets_rev = []
          }).
 
 %%%===================================================================
@@ -48,8 +54,12 @@ get_info(Pid) ->
 add_channel(Topic, Channel, Handler) ->
     gen_server:cast(Topic, {add_channel, Channel, Handler}).
 
+-spec discover(Topic :: ensq:topic_name(), Hosts :: [ensq:hosts()],
+               Channels :: [ensq:channel()]) -> {ok, Pid :: pid()}.
+
 discover(Topic, Hosts, Channels) ->
     discover(Topic, Hosts, Channels, []).
+
 discover(Topic, Hosts, Channels, Targets) when is_list(Hosts)->
     ensq_topic_sup:start_child(Topic, {discovery, Hosts, Channels, Targets});
 
@@ -57,11 +67,14 @@ discover(Topic, Host, Channels, Targets) ->
     discover(Topic, [Host], Channels, Targets).
 
 
+send(Topic, Msg) ->
+    gen_server:call(Topic, {send, Msg}).
+
 retry(Delay, Srv, Ref) ->
     retry(self(), Delay, Srv, Ref).
 
-retry(PID, Delay, Srv, Ref) ->
-    timer:apply_after(Delay, ensq_topic, do_retry, [PID, Srv, Ref]).
+retry(Pid, Delay, Srv, Ref) ->
+    timer:apply_after(Delay, ensq_topic, do_retry, [Pid, Srv, Ref]).
 
 do_retry(Pid, Srv, Ref) ->
     gen_server:cast(Pid, {retry, Srv, Ref}).
@@ -78,6 +91,9 @@ tick(Pid) ->
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
+start_link(Topic, Spec) when is_binary(Topic) ->
+    gen_server:start_link(?MODULE, [Topic, Spec], []);
+
 start_link(Topic, Spec) ->
     gen_server:start_link({local, Topic}, ?MODULE, [Topic, Spec], []).
 
@@ -96,6 +112,11 @@ start_link(Topic, Spec) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
+init([Topic, {discovery, Ds, Channels, Targets}]) when is_binary(Topic) ->
+    tick(),
+    {ok, #state{topic = binary_to_list(Topic), discovery_servers = Ds,
+                channels = Channels, targets = Targets}};
+
 init([Topic, {discovery, Ds, Channels, Targets}]) ->
     tick(),
     {ok, #state{topic = atom_to_list(Topic), discovery_servers = Ds,
@@ -140,11 +161,10 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 handle_cast({add_channel, Channel, Handler},
             State = #state{channels = Cs, servers = Ss}) ->
-    ChanelB = list_to_binary(atom_to_list(Channel)),
     Topic = list_to_binary(State#state.topic),
     Ss1 = orddict:map(
             fun({Host, Port}, Pids) ->
-                    E  = ensq_connection:open(Host, Port, Topic, ChanelB, Handler),
+                    E = ensq_connection:open(Host, Port, Topic, Channel, Handler),
                     Ref = erlang:monitor(process, E),
                     io:format("Reply: ~p~n", [E]),
                     {ok, Pid} = E,
@@ -195,9 +215,7 @@ add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs, ref2srv = R
         false ->
             Topic = list_to_binary(State#state.topic),
             io:format("New: ~s:~p", [Host, Port]),
-            Pids = [{ensq_connection:open(
-                       Host, Port, Topic,
-                       list_to_binary(atom_to_list(Channel)), Handler),
+            Pids = [{ensq_connection:open(Host, Port, Topic, Channel, Handler),
                      Channel, Handler} || {Channel, Handler} <- Cs],
             Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid), 0} ||
                         {{ok, Pid}, Channel, Handler} <- Pids],
