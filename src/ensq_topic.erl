@@ -11,7 +11,8 @@
 -behaviour(gen_server).
 
 %% API
--export([get_info/1, list/0, discover/3, add_channel/3, start_link/2, tick/1]).
+-export([get_info/1, list/0, discover/3, discover/4, add_channel/3,
+         start_link/2, tick/1, do_retry/3]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -29,7 +30,8 @@
           discovery_servers = [],
           discover_interval = 60000,
           servers = [],
-          channels = []
+          channels = [],
+          targets = []
          }).
 
 %%%===================================================================
@@ -46,11 +48,13 @@ get_info(Pid) ->
 add_channel(Topic, Channel, Handler) ->
     gen_server:cast(Topic, {add_channel, Channel, Handler}).
 
-discover(Topic, Hosts, Channels) when is_list(Hosts)->
-    ensq_topic_sup:start_child(Topic, {discovery, Hosts, Channels});
+discover(Topic, Hosts, Channels) ->
+    discover(Topic, Hosts, Channels, []).
+discover(Topic, Hosts, Channels, Targets) when is_list(Hosts)->
+    ensq_topic_sup:start_child(Topic, {discovery, Hosts, Channels, Targets});
 
-discover(Topic, Host, Channels) ->
-    discover(Topic, [Host], Channels).
+discover(Topic, Host, Channels, Targets) ->
+    discover(Topic, [Host], Channels, Targets).
 
 
 retry(Delay, Srv, Ref) ->
@@ -92,10 +96,10 @@ start_link(Topic, Spec) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Topic, {discovery, Ds, Channels}]) ->
+init([Topic, {discovery, Ds, Channels, Targets}]) ->
     tick(),
     {ok, #state{topic = atom_to_list(Topic), discovery_servers = Ds,
-                channels = Channels}}.
+                channels = Channels, targets = Targets}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -206,7 +210,7 @@ build_ref2srv(D) ->
     build_ref2srv(D, []).
 build_ref2srv([], Acc) ->
     Acc;
-build_ref2srv([{Srv, []} | R], Acc) ->
+build_ref2srv([{_Srv, []} | R], Acc) ->
     build_ref2srv(R, Acc);
 build_ref2srv([{Srv, [{_, _, _, Ref, _} | RR]} | R], Acc) ->
     build_ref2srv([{Srv, RR} | R], [{Ref, Srv} | Acc]).
