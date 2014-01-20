@@ -1,4 +1,3 @@
-
 -module(ensq_sup).
 
 -behaviour(supervisor).
