@@ -25,7 +25,9 @@ start_link() ->
 
 init([]) ->
     {ok, { {one_for_one, 5, 10},
-           [?CHILD(ensq_connection_sup, supervisor),
+           [
+            ?CHILD(ensq_in_flow_manager, worker),
+            ?CHILD(ensq_connection_sup, supervisor),
             ?CHILD(ensq_topic_sup, supervisor)
            ]}}.
 

@@ -30,4 +30,3 @@ init([]) ->
     Children = [Element],
     RestartStrategy = {simple_one_for_one, 5, 10},
     {ok, {RestartStrategy, Children}}.
-

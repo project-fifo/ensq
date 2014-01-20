@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([discover/3, add_channel/3, start_link/2, tick/1]).
+-export([get_info/1, list/0, discover/3, add_channel/3, start_link/2, tick/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -19,7 +19,12 @@
 
 -define(SERVER, ?MODULE).
 
+-define(MAX_RETRIES, 10).
+
+-define(RETRY_TIMEOUT, 1000).
+
 -record(state, {
+          ref2srv = [],
           topic,
           discovery_servers = [],
           discover_interval = 60000,
@@ -31,12 +36,31 @@
 %%% API
 %%%===================================================================
 
+list() ->
+    Children = supervisor:which_children(ensq_topic_sup),
+    [get_info(Pid) || {_,Pid,_,_} <- Children].
+
+get_info(Pid) ->
+    gen_server:call(Pid, get_info).
+
 add_channel(Topic, Channel, Handler) ->
     gen_server:cast(Topic, {add_channel, Channel, Handler}).
+
 discover(Topic, Hosts, Channels) when is_list(Hosts)->
     ensq_topic_sup:start_child(Topic, {discovery, Hosts, Channels});
+
 discover(Topic, Host, Channels) ->
     discover(Topic, [Host], Channels).
+
+
+retry(Delay, Srv, Ref) ->
+    retry(self(), Delay, Srv, Ref).
+
+retry(PID, Delay, Srv, Ref) ->
+    timer:apply_after(Delay, ensq_topic, do_retry, [PID, Srv, Ref]).
+
+do_retry(Pid, Srv, Ref) ->
+    gen_server:cast(Pid, {retry, Srv, Ref}).
 
 tick() ->
     tick(self()).
@@ -87,6 +111,15 @@ init([Topic, {discovery, Ds, Channels}]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call(get_info, _From, State =
+                #state{
+                   channels = Channels,
+                   topic = Topic,
+                   servers = Servers
+                  }) ->
+    Reply = {self(), Topic, Channels, Servers},
+    {reply, Reply, State};
+
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -108,11 +141,13 @@ handle_cast({add_channel, Channel, Handler},
     Ss1 = orddict:map(
             fun({Host, Port}, Pids) ->
                     E  = ensq_connection:open(Host, Port, Topic, ChanelB, Handler),
+                    Ref = erlang:monitor(process, E),
                     io:format("Reply: ~p~n", [E]),
                     {ok, Pid} = E,
-                    [{Pid, Channel, Handler} | Pids]
+                    [{Pid, Channel, Handler, Ref, 0} | Pids]
             end, Ss),
-    {noreply, State#state{servers = Ss1, channels = [{Channel, Handler} | Cs]}};
+    {noreply, State#state{servers = Ss1, channels = [{Channel, Handler} | Cs],
+                          ref2srv = build_ref2srv(Ss1)}};
 
 handle_cast(tick, State = #state{discovery_servers = []}) ->
     {noreply, State};
@@ -134,6 +169,7 @@ handle_cast(tick, State = #state{
                                     Acc
                                 end
                     end, State, Hosts),
+    %% Add +/- 10% Jitter for the next discovery
     D = round(I/10),
     T = I + random:uniform(D*2) - D,
     timer:apply_after(T, ensq_topic, tick, [self()]),
@@ -148,7 +184,7 @@ add_discovered(JSON, State) ->
     Producers1 = [get_host(P) || P <- Producers],
     lists:foldl(fun add_host/2, State, Producers1).
 
-add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs}) ->
+add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs, ref2srv = R2S}) ->
     case orddict:is_key({Host, Port}, Srvs) of
         true ->
             State;
@@ -158,10 +194,23 @@ add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs}) ->
             Pids = [{ensq_connection:open(
                        Host, Port, Topic,
                        list_to_binary(atom_to_list(Channel)), Handler),
-                     Channel, Handler}|| {Channel, Handler} <- Cs],
-            Pids1 = [{Pid, Channel, Handler} || {{ok, Pid}, Channel, Handler} <- Pids],
-            State#state{servers = orddict:store({Host, Port}, Pids1, Srvs)}
+                     Channel, Handler} || {Channel, Handler} <- Cs],
+            Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid), 0} ||
+                        {{ok, Pid}, Channel, Handler} <- Pids],
+            Refs = [{Ref, {Host, Port}} || {_, _, _, Ref, _} <- Pids1],
+            State#state{servers = orddict:store({Host, Port}, Pids1, Srvs),
+                        ref2srv = Refs ++ R2S}
     end.
+
+build_ref2srv(D) ->
+    build_ref2srv(D, []).
+build_ref2srv([], Acc) ->
+    Acc;
+build_ref2srv([{Srv, []} | R], Acc) ->
+    build_ref2srv(R, Acc);
+build_ref2srv([{Srv, [{_, _, _, Ref, _} | RR]} | R], Acc) ->
+    build_ref2srv([{Srv, RR} | R], [{Ref, Srv} | Acc]).
+
 
 get_host(Producer) ->
     {ok, Addr} = jsxd:get(<<"broadcast_address">>, Producer),
@@ -186,8 +235,39 @@ http_get(URL) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info(_Info, State) ->
+
+handle_info({'DOWN', Ref, _, _, _}, State = #state{servers=Ss, ref2srv=R2S}) ->
+    State1 = State#state{ref2srv = lists:keydelete(Ref, 1, R2S)},
+    {Ref, Srv} = lists:keyfind(Ref, 1, R2S),
+    SrvData = orddict:fetch(Srv, Ss),
+    case down_ref(Srv, Ref, SrvData) of
+        delete ->
+            {noreply, State1#state{servers=orddict:erase(Srv, Ss)}};
+        SrvData1 ->
+            {noreply, State1#state{servers=orddict:store(Srv, SrvData1, Ss)}}
+    end;
+
+handle_info(_, State) ->
     {noreply, State}.
+
+down_ref(_, Ref, [{_, _, _, Ref, _}]) ->
+    delete;
+down_ref(_, _, []) ->
+    delete;
+down_ref(Srv, Ref, Records) ->
+    Recods1 = lists:keydelete(Ref, 4, Records),
+    case lists:keyfind(Ref, 4, Records) of
+        {_Pid, _Channel, _Handler, Ref, Retries}
+          when Retries >= ?MAX_RETRIES ->
+            Recods1;
+        {_, Channel, Handler, Ref, Retries} ->
+            Retries1 = Retries + 1,
+            Delay = ?RETRY_TIMEOUT * Retries1,
+            retry(Delay, Srv, Ref),
+            [{undefined, Channel, Handler, Ref, Retries+1} | Recods1];
+        _ ->
+            Recods1
+    end.
 
 %%--------------------------------------------------------------------
 %% @private

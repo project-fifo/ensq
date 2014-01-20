@@ -12,17 +12,19 @@
 
 %% API
 -export([open/5, ready/2,
-         start_link/5]).
+         start_link/5, recheck_ready_count/0,
+         recheck_ready/1,
+         recheck_ready_count/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
+-define(RECHECK_INTERVAL, 100).
 
--define(READY_COUNT, 11).
-
--record(state, {socket, buffer, ready_count=?READY_COUNT, handler=ensq_debug_callback}).
+-record(state, {socket, buffer, current_ready_count=1,
+                ready_count=1, handler=ensq_debug_callback}).
 
 %%%===================================================================
 %%% API
@@ -33,6 +35,15 @@ open(Host, Port, Topic, Channel, Handler) ->
 
 ready(Pid, N) ->
     gen_server:cast(Pid, {ready, N}).
+
+recheck_ready_count() ->
+    recheck_ready_count(self()).
+
+recheck_ready_count(Pid) ->
+    timer:apply_after(?RECHECK_INTERVAL, ensq_connection, recheck_ready, [Pid]).
+
+recheck_ready(Pid) ->
+    gen_server:cast(Pid, recheck_ready).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -103,7 +114,18 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 handle_cast({ready, N}, State = #state{socket = S}) ->
     gen_tcp:send(S, ensq_proto:encode({ready, N})),
-    {noreply, State#state{ready_count = N}};
+    {noreply, State#state{ready_count = N, current_ready_count=N}};
+
+handle_cast(recheck_ready, State = #state{socket = S, ready_count=0}) ->
+    State1 = case ensq_in_flow_manager:getrc() of
+                 {ok, 0} ->
+                     recheck_ready_count(),
+                     State;
+                 {ok, N} ->
+                     gen_tcp:send(S, ensq_proto:encode({ready, N})),
+                     State#state{current_ready_count = N, ready_count=N}
+             end,
+    {noreply, State1};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -119,10 +141,33 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({tcp, S, Data}, State = #state{socket = S, buffer=B}) ->
-    {noreply, data(State#state{buffer = <<B/binary, Data/binary>>})};
+handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC}) ->
+    State1 = data(State#state{buffer = <<B/binary, Data/binary>>}),
+    State2 = case State1#state.current_ready_count of
+                 N when N < (RC / 4) ->
+                     %% We don't want to ask for a propper new RC every time
+                     %% this keeps the laod of the flow manager by guessing
+                     %% we'll get the the same value back anyway.
+                     {ok, RC1} = case random:uniform(10) of
+                                     10 ->
+                                         ensq_in_flow_manager:getrc();
+                                     _ ->
+                                         {ok, RC}
+                                 end,
+                     case RC1 of
+                         0 ->
+                             recheck_ready_count();
+                         _ ->
+                             ok
+                     end,
+                     gen_tcp:send(S, ensq_proto:encode({ready, RC1})),
+                     State1#state{current_ready_count = RC1, ready_count=RC1};
+                 _ ->
+                     State1
+             end,
+    {noreply, State2};
 
-handle_info({tcp_closed,S}, State = #state{socket = S}) ->
+handle_info({tcp_closed, S}, State = #state{socket = S}) ->
     io:format("Stopping.~n"),
     {stop, normal, State};
 
@@ -160,7 +205,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
-                    socket = S, handler = C}) ->
+                    socket = S, handler = C, current_ready_count = RC}) ->
     case Raw of
         <<0:32/integer, "_heartbeat_">> ->
             gen_tcp:send(S, ensq_proto:encode(nop));
@@ -191,8 +236,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
         Msg ->
             io:format("[unknown] ~p~n", [Msg])
     end,
-    gen_tcp:send(S, ensq_proto:encode({ready, State#state.ready_count})),
-    data(State#state{buffer=Rest});
+    data(State#state{buffer=Rest, current_ready_count=RC - 1});
 
 data(State) ->
     State.

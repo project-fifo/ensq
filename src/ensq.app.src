@@ -10,7 +10,7 @@
                  ]},
   {mod, { ensq_app, []}},
   {env, [
-         {max_in_flight, 100},
+         {max_in_flight, 300},
          {discovery_inteval, 60000}
         ]}
  ]}.
