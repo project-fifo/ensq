@@ -1,19 +1,21 @@
--module(ensq_sup).
+-module(ensq_channel_sup).
 
 -behaviour(supervisor).
 
 %% API
--export([start_link/0]).
+-export([start_link/0, start_child/5]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
-%% Helper macro for declaring children of supervisor
--define(CHILD(I, Type), {I, {I, start_link, []}, permanent, 5000, Type, [I]}).
-
+-define(SERVER, send_test_srv).
 %% ===================================================================
 %% API functions
 %% ===================================================================
+
+start_child(Host, Port, Topic, Channel, Handler) ->
+    supervisor:start_child(?MODULE, [Host, Port, Topic, Channel, Handler]).
+
 
 start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
@@ -23,11 +25,8 @@ start_link() ->
 %% ===================================================================
 
 init([]) ->
-    {ok, { {one_for_one, 5, 10},
-           [
-            ?CHILD(ensq_in_flow_manager, worker),
-            ?CHILD(ensq_connection_sup, supervisor),
-            ?CHILD(ensq_channel_sup, supervisor),
-            ?CHILD(ensq_topic_sup, supervisor)
-           ]}}.
-
+    Element = {ensq_channel, {ensq_channel, start_link, []},
+               temporary, infinity, worker, [ensq_channel]},
+    Children = [Element],
+    RestartStrategy = {simple_one_for_one, 5, 10},
+    {ok, {RestartStrategy, Children}}.

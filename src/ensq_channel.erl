@@ -4,163 +4,189 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created : 20 Jan 2014 by Heinz Nikolaus Gies <heinz@licenser.net>
+%%% Created : 18 Jan 2014 by Heinz Nikolaus Gies <heinz@licenser.net>
 %%%-------------------------------------------------------------------
 -module(ensq_channel).
 
--behaviour(gen_fsm).
+-behaviour(gen_server).
 
 %% API
--export([start_link/0]).
+-export([open/5, ready/2,
+         start_link/5, recheck_ready_count/0,
+         recheck_ready/1,
+         recheck_ready_count/1]).
 
-%% gen_fsm callbacks
--export([init/1, state_name/2, state_name/3, handle_event/3,
-         handle_sync_event/4, handle_info/3, terminate/3, code_change/4]).
+%% gen_server callbacks
+-export([init/1, handle_call/3, handle_cast/2, handle_info/2,
+         terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
+-define(RECHECK_INTERVAL, 100).
 
--record(state, {}).
+-record(state, {socket, buffer, current_ready_count=1,
+                ready_count=1, handler=ensq_debug_callback}).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
+open(Host, Port, Topic, Channel, Handler) ->
+    ensq_channel_sup:start_child(Host, Port, Topic, Channel, Handler).
+
+ready(Pid, N) ->
+    gen_server:cast(Pid, {ready, N}).
+
+recheck_ready_count() ->
+    recheck_ready_count(self()).
+
+recheck_ready_count(Pid) ->
+    timer:apply_after(?RECHECK_INTERVAL, ensq_channel, recheck_ready, [Pid]).
+
+recheck_ready(Pid) ->
+    gen_server:cast(Pid, recheck_ready).
+
 %%--------------------------------------------------------------------
 %% @doc
-%% Creates a gen_fsm process which calls Module:init/1 to
-%% initialize. To ensure a synchronized start-up procedure, this
-%% function does not return until Module:init/1 has returned.
+%% Starts the server
 %%
 %% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
-start_link() ->
-    gen_fsm:start_link({local, ?SERVER}, ?MODULE, [], []).
+start_link(Host, Port, Topic, Channel, Handler) ->
+    gen_server:start_link(?MODULE, [Host, Port, Topic, Channel, Handler], []).
 
 %%%===================================================================
-%%% gen_fsm callbacks
+%%% gen_server callbacks
 %%%===================================================================
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Whenever a gen_fsm is started using gen_fsm:start/[3,4] or
-%% gen_fsm:start_link/[3,4], this function is called by the new
-%% process to initialize.
+%% Initializes the server
 %%
-%% @spec init(Args) -> {ok, StateName, State} |
-%%                     {ok, StateName, State, Timeout} |
+%% @spec init(Args) -> {ok, State} |
+%%                     {ok, State, Timeout} |
 %%                     ignore |
-%%                     {stop, StopReason}
+%%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([]) ->
-    {ok, state_name, #state{}}.
+init([Host, Port, Topic, Channel, Handler]) ->
+    Opts = [{active, true}, binary, {deliver, term}, {packet, raw}],
+    case gen_tcp:connect(Host, Port, Opts) of
+        {ok, Socket} ->
+            io:format("[~s:~p] connected.~n", [Host, Port]),
+            gen_tcp:send(Socket, ensq_proto:encode(version)),
+            gen_tcp:send(Socket, ensq_proto:encode({subscribe, Topic, Channel})),
+            gen_tcp:send(Socket, ensq_proto:encode({ready, 1})),
+            {ok, #state{socket = Socket, buffer = <<>>, handler = Handler}};
+        E ->
+            io:format("[~s:~p] Error: ~p~n", [Host, Port, E]),
+            {stop, E}
+    end.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% There should be one instance of this function for each possible
-%% state name. Whenever a gen_fsm receives an event sent using
-%% gen_fsm:send_event/2, the instance of this function with the same
-%% name as the current state name StateName is called to handle
-%% the event. It is also called if a timeout occurs.
+%% Handling call messages
 %%
-%% @spec state_name(Event, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState}
+%% @spec handle_call(Request, From, State) ->
+%%                                   {reply, Reply, State} |
+%%                                   {reply, Reply, State, Timeout} |
+%%                                   {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, Reply, State} |
+%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-state_name(_Event, State) ->
-    {next_state, state_name, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% There should be one instance of this function for each possible
-%% state name. Whenever a gen_fsm receives an event sent using
-%% gen_fsm:sync_send_event/[2,3], the instance of this function with
-%% the same name as the current state name StateName is called to
-%% handle the event.
-%%
-%% @spec state_name(Event, From, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {reply, Reply, NextStateName, NextState} |
-%%                   {reply, Reply, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState} |
-%%                   {stop, Reason, Reply, NewState}
-%% @end
-%%--------------------------------------------------------------------
-state_name(_Event, _From, State) ->
+handle_call(_Request, _From, State) ->
     Reply = ok,
-    {reply, Reply, state_name, State}.
+    {reply, Reply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Whenever a gen_fsm receives an event sent using
-%% gen_fsm:send_all_state_event/2, this function is called to handle
-%% the event.
+%% Handling cast messages
 %%
-%% @spec handle_event(Event, StateName, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState}
+%% @spec handle_cast(Msg, State) -> {noreply, State} |
+%%                                  {noreply, State, Timeout} |
+%%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_event(_Event, StateName, State) ->
-    {next_state, StateName, State}.
+handle_cast({ready, N}, State = #state{socket = S}) ->
+    gen_tcp:send(S, ensq_proto:encode({ready, N})),
+    {noreply, State#state{ready_count = N, current_ready_count=N}};
+
+handle_cast(recheck_ready, State = #state{socket = S, ready_count=0}) ->
+    State1 = case ensq_in_flow_manager:getrc() of
+                 {ok, 0} ->
+                     recheck_ready_count(),
+                     State;
+                 {ok, N} ->
+                     gen_tcp:send(S, ensq_proto:encode({ready, N})),
+                     State#state{current_ready_count = N, ready_count=N}
+             end,
+    {noreply, State1};
+
+handle_cast(_Msg, State) ->
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% Whenever a gen_fsm receives an event sent using
-%% gen_fsm:sync_send_all_state_event/[2,3], this function is called
-%% to handle the event.
+%% Handling all non call/cast messages
 %%
-%% @spec handle_sync_event(Event, From, StateName, State) ->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {reply, Reply, NextStateName, NextState} |
-%%                   {reply, Reply, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState} |
-%%                   {stop, Reason, Reply, NewState}
+%% @spec handle_info(Info, State) -> {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_sync_event(_Event, _From, StateName, State) ->
-    Reply = ok,
-    {reply, Reply, StateName, State}.
+
+handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC}) ->
+    State1 = data(State#state{buffer = <<B/binary, Data/binary>>}),
+    State2 = case State1#state.current_ready_count of
+                 N when N < (RC / 4) ->
+                     %% We don't want to ask for a propper new RC every time
+                     %% this keeps the laod of the flow manager by guessing
+                     %% we'll get the the same value back anyway.
+                     {ok, RC1} = case random:uniform(10) of
+                                     10 ->
+                                         ensq_in_flow_manager:getrc();
+                                     _ ->
+                                         {ok, RC}
+                                 end,
+                     case RC1 of
+                         0 ->
+                             recheck_ready_count();
+                         _ ->
+                             ok
+                     end,
+                     gen_tcp:send(S, ensq_proto:encode({ready, RC1})),
+                     State1#state{current_ready_count = RC1, ready_count=RC1};
+                 _ ->
+                     State1
+             end,
+    {noreply, State2};
+
+handle_info({tcp_closed, S}, State = #state{socket = S}) ->
+    io:format("Stopping.~n"),
+    {stop, normal, State};
+
+handle_info(Info, State) ->
+    io:format("Unknown message: ~p~n", [Info]),
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
-%% This function is called by a gen_fsm when it receives any
-%% message other than a synchronous or asynchronous event
-%% (or a system message).
-%%
-%% @spec handle_info(Info,StateName,State)->
-%%                   {next_state, NextStateName, NextState} |
-%%                   {next_state, NextStateName, NextState, Timeout} |
-%%                   {stop, Reason, NewState}
-%% @end
-%%--------------------------------------------------------------------
-handle_info(_Info, StateName, State) ->
-    {next_state, StateName, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_fsm when it is about to
+%% This function is called by a gen_server when it is about to
 %% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_fsm terminates with
-%% Reason. The return value is ignored.
+%% necessary cleaning up. When it returns, the gen_server terminates
+%% with Reason. The return value is ignored.
 %%
-%% @spec terminate(Reason, StateName, State) -> void()
+%% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _StateName, _State) ->
+terminate(_Reason, _State) ->
     ok.
 
 %%--------------------------------------------------------------------
@@ -168,13 +194,49 @@ terminate(_Reason, _StateName, _State) ->
 %% @doc
 %% Convert process state when code is changed
 %%
-%% @spec code_change(OldVsn, StateName, State, Extra) ->
-%%                   {ok, StateName, NewState}
+%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
 %% @end
 %%--------------------------------------------------------------------
-code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+
+data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
+                    socket = S, handler = C, current_ready_count = RC}) ->
+    case Raw of
+        <<0:32/integer, "_heartbeat_">> ->
+            gen_tcp:send(S, ensq_proto:encode(nop));
+        <<0:32/integer, Msg/binary>> ->
+            C:response(ensq_proto:decode(Msg));
+        <<1:32/integer, Data/binary>> ->
+            case ensq_proto:decode(Data) of
+                {message, _Timestamp, MsgID, Msg} ->
+                    case C:message(Msg) of
+                        ok ->
+                            gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
+                        _ ->
+                            ok
+                    end
+            end;
+        <<2:32/integer, Data/binary>> ->
+            case ensq_proto:decode(Data) of
+                {message, _Timestamp, MsgID, _Attempt, Msg} ->
+                    case C:message(Msg) of
+                        ok ->
+                            gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
+                        requeue ->
+                            gen_tcp:send(S, ensq_proto:encode({requeue, MsgID}))
+                    end;
+                Msg ->
+                    io:format("[~p][msg] ~p~n", [self(), Msg])
+            end;
+        Msg ->
+            io:format("[unknown] ~p~n", [Msg])
+    end,
+    data(State#state{buffer=Rest, current_ready_count=RC - 1});
+
+data(State) ->
+    State.

@@ -3,7 +3,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_child/5]).
+-export([start_link/0, start_child/3]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -13,8 +13,8 @@
 %% API functions
 %% ===================================================================
 
-start_child(Host, Port, Topic, Channel, Handler) ->
-    supervisor:start_child(?MODULE, [Host, Port, Topic, Channel, Handler]).
+start_child(Host, Port, Topic) ->
+    supervisor:start_child(?MODULE, [Host, Port, Topic]).
 
 
 start_link() ->

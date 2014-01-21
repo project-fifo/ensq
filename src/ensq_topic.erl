@@ -114,13 +114,28 @@ start_link(Topic, Spec) ->
 %%--------------------------------------------------------------------
 init([Topic, {discovery, Ds, Channels, Targets}]) when is_binary(Topic) ->
     tick(),
-    {ok, #state{topic = binary_to_list(Topic), discovery_servers = Ds,
-                channels = Channels, targets = Targets}};
+    State = #state{topic = binary_to_list(Topic), discovery_servers = Ds,
+                   channels = Channels, targets = Targets},
+    {ok, connect_targets(State)};
 
 init([Topic, {discovery, Ds, Channels, Targets}]) ->
     tick(),
-    {ok, #state{topic = atom_to_list(Topic), discovery_servers = Ds,
-                channels = Channels, targets = Targets}}.
+    State = #state{topic = atom_to_list(Topic), discovery_servers = Ds,
+                   channels = Channels, targets = Targets},
+    {ok, connect_targets(State)}.
+
+connect_targets(State = #state{targets = Targets, topic = Topic}) ->
+    State#state{targets = [connect_target(Target, Topic) || Target <- Targets]}.
+
+
+connect_target({Host, Port}, Topic) ->
+    {ok, Pid} = ensq_connection:open(Host, Port, Topic),
+    Pid;
+connect_target(Targets, Topic) ->
+    Pids = [{{Host, Port}, ensq_connection:open(Host, Port, Topic)} ||
+               {Host, Port} <- Targets],
+    [{Host, Pid} || {Host, {ok, Pid}} <- Pids].
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -136,6 +151,21 @@ init([Topic, {discovery, Ds, Channels, Targets}]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call({send, _}, _From, State = #state{targets = [], targets_rev = []}) ->
+    {reply, {error, not_connected}, State};
+handle_call({send, Msg}, From, State=#state{targets = [], targets_rev = Rev}) ->
+    handle_call({send, Msg}, From, State#state{targets=Rev, targets_rev=[]});
+handle_call({send, Msg}, From, State =
+                #state{targets=[{T, Pid} | Tr], targets_rev=Rev}
+           ) ->
+    ensq_connection:send(Pid, From, Msg),
+    {noreply, State#state{targets = Tr, targets_rev = [{T, Pid} | Rev]}};
+handle_call({send, Msg}, From, State =
+                #state{targets=[Ts | Tr], targets_rev=Rev}
+           ) when is_list(Ts)->
+    [ensq_connection:send(Pid, From, Msg) || {_, Pid} <- Ts],
+    {noreply, State#state{targets = Tr, targets_rev = [Ts | Rev]}};
+
 handle_call(get_info, _From, State =
                 #state{
                    channels = Channels,
@@ -164,7 +194,7 @@ handle_cast({add_channel, Channel, Handler},
     Topic = list_to_binary(State#state.topic),
     Ss1 = orddict:map(
             fun({Host, Port}, Pids) ->
-                    E = ensq_connection:open(Host, Port, Topic, Channel, Handler),
+                    E = ensq_channel:open(Host, Port, Topic, Channel, Handler),
                     Ref = erlang:monitor(process, E),
                     io:format("Reply: ~p~n", [E]),
                     {ok, Pid} = E,
@@ -202,6 +232,59 @@ handle_cast(tick, State = #state{
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling all non call/cast messages
+%%
+%% @spec handle_info(Info, State) -> {noreply, State} |
+%%                                   {noreply, State, Timeout} |
+%%                                   {stop, Reason, State}
+%% @end
+%%--------------------------------------------------------------------
+
+handle_info({'DOWN', Ref, _, _, _}, State = #state{servers=Ss, ref2srv=R2S}) ->
+    State1 = State#state{ref2srv = lists:keydelete(Ref, 1, R2S)},
+    {Ref, Srv} = lists:keyfind(Ref, 1, R2S),
+    SrvData = orddict:fetch(Srv, Ss),
+    case down_ref(Srv, Ref, SrvData) of
+        delete ->
+            {noreply, State1#state{servers=orddict:erase(Srv, Ss)}};
+        SrvData1 ->
+            {noreply, State1#state{servers=orddict:store(Srv, SrvData1, Ss)}}
+    end;
+
+handle_info(_, State) ->
+    {noreply, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% This function is called by a gen_server when it is about to
+%% terminate. It should be the opposite of Module:init/1 and do any
+%% necessary cleaning up. When it returns, the gen_server terminates
+%% with Reason. The return value is ignored.
+%%
+%% @spec terminate(Reason, State) -> void()
+%% @end
+%%--------------------------------------------------------------------
+terminate(_Reason, _State) ->
+    ok.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Convert process state when code is changed
+%%
+%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
+%% @end
+%%--------------------------------------------------------------------
+code_change(_OldVsn, State, _Extra) ->
+    {ok, State}.
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
 
 add_discovered(JSON, State) ->
     {ok, Producers} = jsxd:get([<<"data">>, <<"producers">>], JSON),
@@ -215,7 +298,7 @@ add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs, ref2srv = R
         false ->
             Topic = list_to_binary(State#state.topic),
             io:format("New: ~s:~p", [Host, Port]),
-            Pids = [{ensq_connection:open(Host, Port, Topic, Channel, Handler),
+            Pids = [{ensq_channel:open(Host, Port, Topic, Channel, Handler),
                      Channel, Handler} || {Channel, Handler} <- Cs],
             Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid), 0} ||
                         {{ok, Pid}, Channel, Handler} <- Pids],
@@ -247,31 +330,6 @@ http_get(URL) ->
             error
     end.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-
-handle_info({'DOWN', Ref, _, _, _}, State = #state{servers=Ss, ref2srv=R2S}) ->
-    State1 = State#state{ref2srv = lists:keydelete(Ref, 1, R2S)},
-    {Ref, Srv} = lists:keyfind(Ref, 1, R2S),
-    SrvData = orddict:fetch(Srv, Ss),
-    case down_ref(Srv, Ref, SrvData) of
-        delete ->
-            {noreply, State1#state{servers=orddict:erase(Srv, Ss)}};
-        SrvData1 ->
-            {noreply, State1#state{servers=orddict:store(Srv, SrvData1, Ss)}}
-    end;
-
-handle_info(_, State) ->
-    {noreply, State}.
-
 down_ref(_, Ref, [{_, _, _, Ref, _}]) ->
     delete;
 down_ref(_, _, []) ->
@@ -290,32 +348,3 @@ down_ref(Srv, Ref, Records) ->
         _ ->
             Recods1
     end.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% This function is called by a gen_server when it is about to
-%% terminate. It should be the opposite of Module:init/1 and do any
-%% necessary cleaning up. When it returns, the gen_server terminates
-%% with Reason. The return value is ignored.
-%%
-%% @spec terminate(Reason, State) -> void()
-%% @end
-%%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
-    ok.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
-
-%%%===================================================================
-%%% Internal functions
-%%%===================================================================

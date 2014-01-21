@@ -19,7 +19,7 @@
 
 -define(SERVER, ?MODULE).
 
--record(state, {max_in_flight, connections=[], last_count=0}).
+-record(state, {max_in_flight, channels=[], last_count=0}).
 
 %%%===================================================================
 %%% API
@@ -70,18 +70,18 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(getrc, {From, _}, State=#state{connections=Cs, max_in_flight=Max}) ->
+handle_call(getrc, {From, _}, State=#state{channels=Cs, max_in_flight=Max}) ->
     case lists:keyfind(From, 2, Cs) of
         false ->
-            InUse = lists:count([N || {N, _, _} <- Cs]),
+            InUse = lists:sum([N || {N, _, _} <- Cs]),
             Free = Max - InUse,
             {N, CsN} =
                 case length(Cs) of
-                    %% We have more connections then we have max in flight
+                    %% We have more channels then we have max in flight
                     %% so this one will have to wait.
                     L when L >= Max ->
                         {0, Cs};
-                    %% This is the first connection we hand out 50%
+                    %% This is the first channel we hand out 50%
                     0 ->
                         {erlang:trunc(Max*0.5), Cs};
                     %% If we have more then the average free we can jsut go and
@@ -89,29 +89,29 @@ handle_call(getrc, {From, _}, State=#state{connections=Cs, max_in_flight=Max}) -
                     L when Free > Max/L ->
                         Avg = erlang:trunc(Max*0.5/L),
                         {Avg, Cs};
-                    %% We have only a few connections so we we might be able to
-                    %% grab a few from the largest connection.
+                    %% We have only a few channels so we we might be able to
+                    %% grab a few from the largest channel.
                     L when L < (Max / 20) ->
                         [{NMax, PidMax, RefMax} | CsS] = lists:sort(Cs),
                         N1 = erlang:trunc(NMax/2),
-                        ensq_connection:ready(PidMax, N1),
+                        ensq_channel:ready(PidMax, N1),
                         {N1, [{NMax, PidMax, RefMax} | CsS]};
                     %% We'll have to reshuffle the while ready count sorry.
-                    %% Every connection will get a equal share of 75% of
+                    %% Every channel will get a equal share of 75% of
                     L ->
                         RC = erlang:trunc((Max/L)*0.75),
                         Cs1 = [{RC, P, R} || {_, P, R} <- Cs],
-                        [ensq_connection:ready(Pid, N) || {N, Pid, _} <- Cs1],
+                        [ensq_channel:ready(Pid, N) || {N, Pid, _} <- Cs1],
                         {RC, Cs1}
                 end,
             Ref = erlang:monitor(process, From),
-            {reply, {ok, N}, State#state{connections=[{N, From, Ref}|CsN]}};
+            {reply, {ok, N}, State#state{channels=[{N, From, Ref}|CsN]}};
         %% We did not get a Recive Count before :(
         {0, From, _Ref} ->
             {reply, {ok, 0}, State};
         %% We got a receive count!
         {N, From, _Ref} ->
-            %% If we only have one connection we slowsly scale this up
+            %% If we only have one channel we slowsly scale this up
             case length(Cs) of
                 1 ->
                     RC1 = erlang:min(Max*0.9, N*1.1),
@@ -148,8 +148,8 @@ handle_cast(_Msg, State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_info({'DOWN', Ref, _, _, _}, State = #state{connections=Cs}) ->
-    {noreply, State#state{connections=lists:keydelete(Ref, 3, Cs)}};
+handle_info({'DOWN', Ref, _, _, _}, State = #state{channels=Cs}) ->
+    {noreply, State#state{channels=lists:keydelete(Ref, 3, Cs)}};
 handle_info(_Info, State) ->
     {noreply, State}.
 
