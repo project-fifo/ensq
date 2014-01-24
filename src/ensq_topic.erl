@@ -18,7 +18,7 @@
          start_link/2]).
 
 %% Internal
--export([tick/1, do_retry/3]).
+-export([tick/1, do_retry/5]).
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3]).
@@ -70,14 +70,14 @@ discover(Topic, Host, Channels, Targets) ->
 send(Topic, Msg) ->
     gen_server:call(Topic, {send, Msg}).
 
-retry(Delay, Srv, Ref) ->
-    retry(self(), Delay, Srv, Ref).
+retry(Srv, Channel, Handler, Retry) ->
+    retry(self(), Srv, Channel, Handler, Retry).
 
-retry(Pid, Delay, Srv, Ref) ->
-    timer:apply_after(Delay, ensq_topic, do_retry, [Pid, Srv, Ref]).
+retry(Pid, Srv, Channel, Handler, Retry) ->
+    timer:apply_after(Retry*1000, ensq_topic, do_retry, [Pid, Srv, Channel, Handler, Retry]).
 
-do_retry(Pid, Srv, Ref) ->
-    gen_server:cast(Pid, {retry, Srv, Ref}).
+do_retry(Pid, Srv, Channel, Handler, Retry) ->
+    gen_server:cast(Pid, {retry, Srv, Channel, Handler, Retry}).
 
 tick() ->
     tick(self()).
@@ -129,6 +129,7 @@ connect_targets(State = #state{targets = Targets, topic = Topic}) ->
 
 
 connect_target({Host, Port}, Topic) ->
+    
     {ok, Pid} = ensq_connection:open(Host, Port, Topic),
     Pid;
 connect_target(Targets, Topic) ->
@@ -189,16 +190,34 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_cast({retry, {Host, Port}, Channel, Handler, Retry},
+            State = #state{servers = Ss}) ->
+    Topic = list_to_binary(State#state.topic),
+    case ensq_channel:open(Host, Port, Topic, Channel, Handler) of
+        {ok, Pid} ->
+            Ref = erlang:monitor(process, Pid),
+            Entry = {Pid, Channel, Handler, Ref},
+            Ss1 = orddict:append({Host, Port}, Entry, Ss),
+            {noreply, State#state{servers = Ss1, ref2srv = build_ref2srv(Ss1)}};
+        E ->
+            io:format("Retry ~p of connection ~s:~p failed with ~p.~n",
+                      [Retry, Host, Port, E]),
+            retry({Host, Port}, Channel, Handler, Retry+1),
+            {noreply, State}
+    end;
 handle_cast({add_channel, Channel, Handler},
             State = #state{channels = Cs, servers = Ss}) ->
     Topic = list_to_binary(State#state.topic),
     Ss1 = orddict:map(
             fun({Host, Port}, Pids) ->
-                    E = ensq_channel:open(Host, Port, Topic, Channel, Handler),
-                    Ref = erlang:monitor(process, E),
-                    io:format("Reply: ~p~n", [E]),
-                    {ok, Pid} = E,
-                    [{Pid, Channel, Handler, Ref, 0} | Pids]
+                    case ensq_channel:open(Host, Port, Topic, Channel, Handler) of
+                        {ok, Pid} ->
+                            Ref = erlang:monitor(process, Pid),
+                            [{Pid, Channel, Topic, Handler, Ref}| Pids];
+                        E ->
+                            io:format("Reply: ~p~n", [E]),
+                            Pids
+                        end
             end, Ss),
     {noreply, State#state{servers = Ss1, channels = [{Channel, Handler} | Cs],
                           ref2srv = build_ref2srv(Ss1)}};
@@ -227,7 +246,7 @@ handle_cast(tick, State = #state{
     D = round(I/10),
     T = I + random:uniform(D*2) - D,
     timer:apply_after(T, ensq_topic, tick, [self()]),
-    {noreply, State1};
+    {noreply, State1#state{ref2srv = build_ref2srv(State1#state.servers)}};
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -300,7 +319,7 @@ add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs, ref2srv = R
             io:format("New: ~s:~p", [Host, Port]),
             Pids = [{ensq_channel:open(Host, Port, Topic, Channel, Handler),
                      Channel, Handler} || {Channel, Handler} <- Cs],
-            Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid), 0} ||
+            Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid)} ||
                         {{ok, Pid}, Channel, Handler} <- Pids],
             Refs = [{Ref, {Host, Port}} || {_, _, _, Ref, _} <- Pids1],
             State#state{servers = orddict:store({Host, Port}, Pids1, Srvs),
@@ -313,7 +332,7 @@ build_ref2srv([], Acc) ->
     Acc;
 build_ref2srv([{_Srv, []} | R], Acc) ->
     build_ref2srv(R, Acc);
-build_ref2srv([{Srv, [{_, _, _, Ref, _} | RR]} | R], Acc) ->
+build_ref2srv([{Srv, [{_, _, _, Ref} | RR]} | R], Acc) ->
     build_ref2srv([{Srv, RR} | R], [{Ref, Srv} | Acc]).
 
 
@@ -337,14 +356,9 @@ down_ref(_, _, []) ->
 down_ref(Srv, Ref, Records) ->
     Recods1 = lists:keydelete(Ref, 4, Records),
     case lists:keyfind(Ref, 4, Records) of
-        {_Pid, _Channel, _Handler, Ref, Retries}
-          when Retries >= ?MAX_RETRIES ->
+        {_, Channel, Handler, Ref} ->
+            retry(Srv, Channel, Handler, 0),
             Recods1;
-        {_, Channel, Handler, Ref, Retries} ->
-            Retries1 = Retries + 1,
-            Delay = ?RETRY_TIMEOUT * Retries1,
-            retry(Delay, Srv, Ref),
-            [{undefined, Channel, Handler, Ref, Retries+1} | Recods1];
         _ ->
             Recods1
     end.
