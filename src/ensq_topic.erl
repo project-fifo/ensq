@@ -68,13 +68,17 @@ discover(Topic, Host, Channels, Targets) ->
 
 
 send(Topic, Msg) ->
+    io:format("Sending!~n"),
     gen_server:call(Topic, {send, Msg}).
 
 retry(Srv, Channel, Handler, Retry) ->
     retry(self(), Srv, Channel, Handler, Retry).
 
 retry(Pid, Srv, Channel, Handler, Retry) ->
-    timer:apply_after(Retry*1000, ensq_topic, do_retry, [Pid, Srv, Channel, Handler, Retry]).
+    %% Wait retry seconds, at a maximum of 10 seconds
+    %% Todo: sanitize those numbers!
+    timer:apply_after(erlang:min(Retry, 10)*1000, ensq_topic, do_retry,
+                      [Pid, Srv, Channel, Handler, Retry]).
 
 do_retry(Pid, Srv, Channel, Handler, Retry) ->
     gen_server:cast(Pid, {retry, Srv, Channel, Handler, Retry}).
@@ -129,13 +133,12 @@ connect_targets(State = #state{targets = Targets, topic = Topic}) ->
 
 
 connect_target({Host, Port}, Topic) ->
-    
     {ok, Pid} = ensq_connection:open(Host, Port, Topic),
     Pid;
 connect_target(Targets, Topic) ->
-    Pids = [{{Host, Port}, ensq_connection:open(Host, Port, Topic)} ||
+    Pids = [ensq_connection:open(Host, Port, Topic) ||
                {Host, Port} <- Targets],
-    [{Host, Pid} || {Host, {ok, Pid}} <- Pids].
+    [Pid || {ok,Pid} <- Pids].
 
 
 %%--------------------------------------------------------------------
@@ -157,10 +160,11 @@ handle_call({send, _}, _From, State = #state{targets = [], targets_rev = []}) ->
 handle_call({send, Msg}, From, State=#state{targets = [], targets_rev = Rev}) ->
     handle_call({send, Msg}, From, State#state{targets=Rev, targets_rev=[]});
 handle_call({send, Msg}, From, State =
-                #state{targets=[{T, Pid} | Tr], targets_rev=Rev}
-           ) ->
+                #state{targets=[Pid | Tr], targets_rev=Rev}
+           ) when is_pid(Pid) ->
+    io:format("Sending ~p from ~p over ~p.~n", [Msg, From, Pid]),
     ensq_connection:send(Pid, From, Msg),
-    {noreply, State#state{targets = Tr, targets_rev = [{T, Pid} | Rev]}};
+    {noreply, State#state{targets = Tr, targets_rev = [Pid | Rev]}};
 handle_call({send, Msg}, From, State =
                 #state{targets=[Ts | Tr], targets_rev=Rev}
            ) when is_list(Ts)->
@@ -176,7 +180,8 @@ handle_call(get_info, _From, State =
     Reply = {self(), Topic, Channels, Servers},
     {reply, Reply, State};
 
-handle_call(_Request, _From, State) ->
+handle_call(Req, _From, State) ->
+    io:format("Unknown message: ~p~n", [Req]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -316,7 +321,6 @@ add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs, ref2srv = R
             State;
         false ->
             Topic = list_to_binary(State#state.topic),
-            io:format("New: ~s:~p", [Host, Port]),
             Pids = [{ensq_channel:open(Host, Port, Topic, Channel, Handler),
                      Channel, Handler} || {Channel, Handler} <- Cs],
             Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid)} ||

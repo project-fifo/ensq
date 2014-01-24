@@ -71,16 +71,30 @@ start_link(Host, Port, Topic, Channel, Handler) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Host, Port, Topic, Channel, Handler]) ->
-    Opts = [{active, true}, binary, {deliver, term}, {packet, raw}],
+    Opts = [{active, false}, binary, {deliver, term}, {packet, raw}],
     case gen_tcp:connect(Host, Port, Opts) of
-        {ok, Socket} ->
-            io:format("[~s:~p] connected.~n", [Host, Port]),
-            gen_tcp:send(Socket, ensq_proto:encode(version)),
-            gen_tcp:send(Socket, ensq_proto:encode({subscribe, Topic, Channel})),
-            gen_tcp:send(Socket, ensq_proto:encode({ready, 1})),
-            {ok, #state{socket = Socket, buffer = <<>>, handler = Handler}};
+        {ok, S} ->
+            lager:debug("[channel|~s:~p] connected.~n", [Host, Port]),
+
+            lager:debug("[channel|~s:~p] Sending version.~n", [Host, Port]),
+            gen_tcp:send(S, ensq_proto:encode(version)),
+
+            lager:debug("[channel|~s:~p] Subscribing to ~s/~s.~n",
+                      [Host, Port, Topic, Channel]),
+            gen_tcp:send(S, ensq_proto:encode({subscribe, Topic, Channel})),
+
+            lager:debug("[channel|~s:~p] Waiting for ack.~n", [Host, Port]),
+            {ok, <<0,0,0,6,0,0,0,0,79,75>>} = gen_tcp:recv(S, 0),
+            lager:debug("[channel|~s:~p] Got ack changing to active mode!~n", [Host, Port]),
+            inet:setopts(S, [{active, true}]),
+
+            lager:debug("[channel|~s:~p] Setting Ready state to 1.~n", [Host, Port]),
+            gen_tcp:send(S, ensq_proto:encode({ready, 1})),
+
+            lager:debug("[~s:~p] Done initializing.~n", [Host, Port]),
+            {ok, #state{socket = S, buffer = <<>>, handler = Handler}};
         E ->
-            io:format("[~s:~p] Error: ~p~n", [Host, Port, E]),
+            lager:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
             {stop, E}
     end.
 
@@ -168,7 +182,6 @@ handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC}) ->
     {noreply, State2};
 
 handle_info({tcp_closed, S}, State = #state{socket = S}) ->
-    io:format("Stopping.~n"),
     {stop, normal, State};
 
 handle_info(Info, State) ->
@@ -217,7 +230,9 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                     case C:message(Msg) of
                         ok ->
                             gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
-                        _ ->
+                        O ->
+                            lager:warning("[channel|~p] ~p -> Not finishing ~s",
+                                          [O, C, MsgID]),
                             ok
                     end
             end;
@@ -231,10 +246,12 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                             gen_tcp:send(S, ensq_proto:encode({requeue, MsgID}))
                     end;
                 Msg ->
-                    io:format("[~p][msg] ~p~n", [self(), Msg])
+                    lager:warning("[channel|~p] Unknown message ~p.",
+                                  [C, Msg])
             end;
         Msg ->
-            io:format("[unknown] ~p~n", [Msg])
+            lager:warning("[channel|~p] Unknown message ~p.",
+                          [C, Msg])
     end,
     data(State#state{buffer=Rest, current_ready_count=RC - 1});
 

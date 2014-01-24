@@ -22,7 +22,7 @@
 -define(SERVER, ?MODULE).
 -define(RECHECK_INTERVAL, 100).
 
--record(state, {socket, buffer, topic, from}).
+-record(state, {socket, buffer, topic, from, host, port}).
 
 %%%===================================================================
 %%% API
@@ -60,17 +60,26 @@ start_link(Host, Port, Topic) ->
 %% @end
 %%--------------------------------------------------------------------
 init([Host, Port, Topic]) ->
+    {ok, connect(#state{topic = list_to_binary(Topic),
+                        host = Host, port = Port})}.
+
+connect(State = #state{host = Host, port = Port}) ->
+    case State#state.socket of
+        undefined ->
+            ok;
+        Old ->
+            gen_tcp:close(Old)
+    end,
     Opts = [{active, true}, binary, {deliver, term}, {packet, raw}],
+    State1 = State#state{socket = undefined, buffer = <<>>, from = undefined},
     case gen_tcp:connect(Host, Port, Opts) of
         {ok, Socket} ->
-            io:format("[~s:~p/~p] target connected.~n", [Host, Port, Topic]),
             gen_tcp:send(Socket, ensq_proto:encode(version)),
-            {ok, #state{socket = Socket, buffer = <<>>, topic = list_to_binary(Topic)}};
+            State1#state{socket = Socket};
         E ->
             io:format("[~s:~p]  target Error: ~p~n", [Host, Port, E]),
-            {stop, E}
+            State1
     end.
-
 %%--------------------------------------------------------------------
 %% @private
 %% @doc
@@ -101,8 +110,28 @@ handle_call(_Request, _From, State) ->
 %%--------------------------------------------------------------------
 
 handle_cast({send, From, Msg}, State=#state{socket=S, topic=Topic}) ->
-    gen_tcp:send(S, ensq_proto:encode({publish, Topic, Msg})),
-    {noreply, State#state{from = From}};
+    State1 = case S of
+                 undefined ->
+                     connect(State);
+                 _ ->
+                     State
+             end,
+    S1 = State1#state.socket,
+    case S1 of
+        undefined ->
+            gen_server:reply(From, {error, not_connected}),
+            {noreply, State1};
+        _ ->
+            case gen_tcp:send(S1, ensq_proto:encode({publish, Topic, Msg})) of
+                ok ->
+                    {noreply, State#state{from = From}};
+                E ->
+                    io:format("[~s] Ooops: ~p~n", [Topic, E]),
+                    gen_server:reply(From, E),
+                    {noreply, connect(State)}
+            end
+    end;
+
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -117,16 +146,18 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B}) ->
+handle_info({tcp, S, Data}, State=#state{ socket = S, buffer=B}) ->
     State1 = data(State#state{buffer = <<B/binary, Data/binary>>}),
     {noreply, State1};
+handle_info({tcp, S, Data}, State=#state{socket = S0, buffer=B}) ->
+    State1 = data(State#state{buffer = <<B/binary, Data/binary>>, socket = S}),
+    gen_tcp:close(S),
+    {noreply, State1#state{socket = S0}};
 
 handle_info({tcp_closed, S}, State = #state{socket = S}) ->
-    io:format("Stopping.~n"),
-    {stop, normal, State};
+    {noreply, connect(State)};
 
-handle_info(Info, State) ->
-    io:format("Unknown message: ~p~n", [Info]),
+handle_info(_Info, State) ->
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -166,13 +197,15 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
         <<0:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, Msg} ->
-                    io:format("[rsp:~s] ~p", [MsgID, Msg]);
+                    gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
+                    gen_server:reply(From, Msg);
                 Msg ->
                     gen_server:reply(From, Msg)
             end;
         <<1:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, Msg} ->
+                    gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
                     io:format("[msg:~s] ~p", [MsgID, Msg]);
                 Msg ->
                     io:format("[msg] ~p", [Msg])
@@ -180,9 +213,10 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
         <<2:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, Msg} ->
-                    io:format("[err:~s] ~p", [MsgID, Msg]);
+                    gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
+                    gen_server:reply(From, Msg);
                 Msg ->
-                    io:format("[err] ~p", [Msg])
+                    gen_server:reply(From, Msg)
             end;
         Msg ->
             io:format("[unknown] ~p~n", [Msg])
