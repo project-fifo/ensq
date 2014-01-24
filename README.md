@@ -4,15 +4,11 @@ This library implements a client to the [NSQ Messaging Queue](http://bitly.githu
 ### Missing features
 
 - Support for direct non discovery connections.
-- Configuration options for discovery polling interval and jitter.
 - TCP discovery (using HTTP currently).
 - Proper behavior when `max_in_flight` is smaller then the total number of connections.
 - Support for UTF8 hostnames (seems to be a Erlang limitation).
 - Protocol negation with `IDENTIFY`.
 	- max_ready_count delegation from the server.
-- Reconnect intervals and progression are not configurable and apply for all even discovered connections.
-- Any advanced features.
-- Touch.
 
 ### Design
 The Erlang process model fits the nsq client concept quite well so:
@@ -47,11 +43,13 @@ The Erlang process model fits the nsq client concept quite well so:
 ```
 
 ### API
-```erlang
-%% Starts the application
-ensq:start(). 
 
-%% Setting up a topic
+#### Using `ensq:init`
+One way to connect to nsq is using 
+
+#### Setting up topics seperately
+```
+%% Setting up a topic sepperately.
 DiscoveryServers = [{"localhost", 4161}], %% Discovery Server
 Channels = [{<<"test">>,                  %% Channel name
 			  ensq_debug_callback},       %% Callback Module
@@ -66,3 +64,12 @@ ensq_topic:discover(
 %% Sending a message to a topic
 ensq_topic:send(test, <<"hello there!">>).
 ```
+
+### Configuration
+
+- `max_in_flight` maximum number of messages the server can handle at once (`300`).
+- `discovery_inteval` Delay between discovery requests in milliseconds (`60000`).
+- `discover_jitter` Jitter in percent added or subtracted of the discovery interval, a value of `10` gives a total jitter of `20%` by adding between `-10%` and `+10%` (`10`).
+- `max_retry_delay` The maximum delay for retries in milliseconds (`10000`).
+- `retry_inital` Initial retry value in milliseconds (`1000`).
+- `retry_inc_type` The algoritm the retry interval progresses, it can either be `linear` making the retry delay `Attempt*retry_inital` milliseconds or `quadratic` making the retry delay `Attempt*Attempt*retry_inital`

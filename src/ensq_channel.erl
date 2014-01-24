@@ -21,7 +21,12 @@
          terminate/2, code_change/3]).
 
 -define(SERVER, ?MODULE).
+
 -define(RECHECK_INTERVAL, 100).
+
+-define(FRAME_TYPE_RESPONSE, 0).
+-define(FRAME_TYPE_ERROR, 1).
+-define(FRAME_TYPE_MESSAGE, 2).
 
 -record(state, {socket, buffer, current_ready_count=1,
                 ready_count=1, handler=ensq_debug_callback}).
@@ -185,7 +190,7 @@ handle_info({tcp_closed, S}, State = #state{socket = S}) ->
     {stop, normal, State};
 
 handle_info(Info, State) ->
-    io:format("Unknown message: ~p~n", [Info]),
+    lager:warning("Unknown message: ~p~n", [Info]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -220,11 +225,11 @@ code_change(_OldVsn, State, _Extra) ->
 data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                     socket = S, handler = C, current_ready_count = RC}) ->
     case Raw of
-        <<0:32/integer, "_heartbeat_">> ->
+        <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
             gen_tcp:send(S, ensq_proto:encode(nop));
-        <<0:32/integer, Msg/binary>> ->
+        <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
             C:response(ensq_proto:decode(Msg));
-        <<1:32/integer, Data/binary>> ->
+        <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, Msg} ->
                     case C:message(Msg) of
@@ -236,10 +241,13 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                             ok
                     end
             end;
-        <<2:32/integer, Data/binary>> ->
+        <<?FRAME_TYPE_MESSAGE:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, _Attempt, Msg} ->
-                    case C:message(Msg) of
+                    TouchFn = fun() ->
+                                      gen_tcp:send(S, ensq_proto:encode({touch, MsgID}))
+                              end,
+                    case C:message(Msg, TouchFn) of
                         ok ->
                             gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
                         requeue ->

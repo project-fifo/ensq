@@ -1,16 +1,21 @@
 {application, ensq,
  [
-  {description, ""},
-  {vsn, "1"},
+  {description, "Erlang client for NSQ"},
+  {vsn, "0.1.0"},
   {registered, []},
   {applications, [
                   kernel,
                   inets,
-                  stdlib
+                  stdlib,
+                  lager
                  ]},
   {mod, { ensq_app, []}},
   {env, [
          {max_in_flight, 300},
-         {discovery_inteval, 60000}
+         {discover_interval, 60000},
+         {discover_jitter, 10},
+         {max_retry_delay, 10000},
+         {retry_inital, 1000},
+         {retry_inc_type, linear}
         ]}
  ]}.

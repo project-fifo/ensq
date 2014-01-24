@@ -37,7 +37,9 @@
           servers = [],
           channels = [],
           targets = [],
-          targets_rev = []
+          targets_rev = [],
+          retry_rule,
+          jitter = 0
          }).
 
 %%%===================================================================
@@ -68,16 +70,21 @@ discover(Topic, Host, Channels, Targets) ->
 
 
 send(Topic, Msg) ->
-    io:format("Sending!~n"),
     gen_server:call(Topic, {send, Msg}).
 
-retry(Srv, Channel, Handler, Retry) ->
-    retry(self(), Srv, Channel, Handler, Retry).
+retry(Srv, Channel, Handler, Retry, Rule) ->
+    retry(self(), Srv, Channel, Handler, Retry, Rule).
 
-retry(Pid, Srv, Channel, Handler, Retry) ->
+retry(Pid, Srv, Channel, Handler, Retry, {Max, Val, Type}) ->
     %% Wait retry seconds, at a maximum of 10 seconds
     %% Todo: sanitize those numbers!
-    timer:apply_after(erlang:min(Retry, 10)*1000, ensq_topic, do_retry,
+    Delay = case Type of
+                linear ->
+                    erlang:min(Retry*Val, Max);
+                quadratic ->
+                    erlang:min(Retry*Retry*Val, Max)
+            end,
+    timer:apply_after(Delay, ensq_topic, do_retry,
                       [Pid, Srv, Channel, Handler, Retry]).
 
 do_retry(Pid, Srv, Channel, Handler, Retry) ->
@@ -118,18 +125,21 @@ start_link(Topic, Spec) ->
 %%--------------------------------------------------------------------
 init([Topic, {discovery, Ds, Channels, Targets}]) when is_binary(Topic) ->
     tick(),
-    State = #state{topic = binary_to_list(Topic), discovery_servers = Ds,
-                   channels = Channels, targets = Targets},
+    State0 = build_opts([]),
+    State = State0#state{topic = binary_to_list(Topic), discovery_servers = Ds,
+                         channels = Channels, targets = Targets},
     {ok, connect_targets(State)};
 
 init([Topic, {discovery, Ds, Channels, Targets}]) ->
     tick(),
-    State = #state{topic = atom_to_list(Topic), discovery_servers = Ds,
-                   channels = Channels, targets = Targets},
+    State0 = build_opts([]),
+    State = State0#state{topic = atom_to_list(Topic), discovery_servers = Ds,
+                         channels = Channels, targets = Targets},
     {ok, connect_targets(State)}.
 
 connect_targets(State = #state{targets = Targets, topic = Topic}) ->
     State#state{targets = [connect_target(Target, Topic) || Target <- Targets]}.
+
 
 
 connect_target({Host, Port}, Topic) ->
@@ -139,6 +149,25 @@ connect_target(Targets, Topic) ->
     Pids = [ensq_connection:open(Host, Port, Topic) ||
                {Host, Port} <- Targets],
     [Pid || {ok,Pid} <- Pids].
+
+
+build_opts(Opts) ->
+    {ok, Interval} = application:get_env(discover_interval),
+    {ok, Jitter} = application:get_env(discover_jitter),
+    {ok, MaxDelay} = application:get_env(max_retry_delay),
+    {ok, RetInitial} = application:get_env(retry_inital),
+    {ok, RetType} = application:get_env(retry_inc_type),
+    RetryRule = {MaxDelay, RetInitial, RetType},
+    State = #state{discover_interval = Interval, jitter = Jitter,
+                   retry_rule = RetryRule},
+    build_opts(Opts, State).
+
+build_opts([_ | R], State) ->
+    build_opts(R, State);
+
+build_opts([], State) ->
+    State.
+
 
 
 %%--------------------------------------------------------------------
@@ -162,7 +191,6 @@ handle_call({send, Msg}, From, State=#state{targets = [], targets_rev = Rev}) ->
 handle_call({send, Msg}, From, State =
                 #state{targets=[Pid | Tr], targets_rev=Rev}
            ) when is_pid(Pid) ->
-    io:format("Sending ~p from ~p over ~p.~n", [Msg, From, Pid]),
     ensq_connection:send(Pid, From, Msg),
     {noreply, State#state{targets = Tr, targets_rev = [Pid | Rev]}};
 handle_call({send, Msg}, From, State =
@@ -181,7 +209,7 @@ handle_call(get_info, _From, State =
     {reply, Reply, State};
 
 handle_call(Req, _From, State) ->
-    io:format("Unknown message: ~p~n", [Req]),
+    lager:warning("Unknown message: ~p~n", [Req]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -196,7 +224,7 @@ handle_call(Req, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_cast({retry, {Host, Port}, Channel, Handler, Retry},
-            State = #state{servers = Ss}) ->
+            State = #state{servers = Ss, retry_rule = Rule}) ->
     Topic = list_to_binary(State#state.topic),
     case ensq_channel:open(Host, Port, Topic, Channel, Handler) of
         {ok, Pid} ->
@@ -205,9 +233,9 @@ handle_cast({retry, {Host, Port}, Channel, Handler, Retry},
             Ss1 = orddict:append({Host, Port}, Entry, Ss),
             {noreply, State#state{servers = Ss1, ref2srv = build_ref2srv(Ss1)}};
         E ->
-            io:format("Retry ~p of connection ~s:~p failed with ~p.~n",
-                      [Retry, Host, Port, E]),
-            retry({Host, Port}, Channel, Handler, Retry+1),
+            lager:warning("Retry ~p of connection ~s:~p failed with ~p.~n",
+                          [Retry, Host, Port, E]),
+            retry({Host, Port}, Channel, Handler, Retry+1, Rule),
             {noreply, State}
     end;
 handle_cast({add_channel, Channel, Handler},
@@ -220,7 +248,7 @@ handle_cast({add_channel, Channel, Handler},
                             Ref = erlang:monitor(process, Pid),
                             [{Pid, Channel, Topic, Handler, Ref}| Pids];
                         E ->
-                            io:format("Reply: ~p~n", [E]),
+                            lager:warning("Failed opening channel: ~p~n", [E]),
                             Pids
                         end
             end, Ss),
@@ -248,7 +276,7 @@ handle_cast(tick, State = #state{
                                 end
                     end, State, Hosts),
     %% Add +/- 10% Jitter for the next discovery
-    D = round(I/10),
+    D = round(I/State#state.jitter),
     T = I + random:uniform(D*2) - D,
     timer:apply_after(T, ensq_topic, tick, [self()]),
     {noreply, State1#state{ref2srv = build_ref2srv(State1#state.servers)}};
@@ -267,11 +295,12 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({'DOWN', Ref, _, _, _}, State = #state{servers=Ss, ref2srv=R2S}) ->
+handle_info({'DOWN', Ref, _, _, _}, State = 
+                #state{servers=Ss, ref2srv=R2S, retry_rule = Rule}) ->
     State1 = State#state{ref2srv = lists:keydelete(Ref, 1, R2S)},
     {Ref, Srv} = lists:keyfind(Ref, 1, R2S),
     SrvData = orddict:fetch(Srv, Ss),
-    case down_ref(Srv, Ref, SrvData) of
+    case down_ref(Srv, Ref, SrvData, Rule) of
         delete ->
             {noreply, State1#state{servers=orddict:erase(Srv, Ss)}};
         SrvData1 ->
@@ -353,15 +382,15 @@ http_get(URL) ->
             error
     end.
 
-down_ref(_, Ref, [{_, _, _, Ref, _}]) ->
+down_ref(_, Ref, [{_, _, _, Ref, _}], _) ->
     delete;
-down_ref(_, _, []) ->
+down_ref(_, _, [], _) ->
     delete;
-down_ref(Srv, Ref, Records) ->
+down_ref(Srv, Ref, Records, Rule) ->
     Recods1 = lists:keydelete(Ref, 4, Records),
     case lists:keyfind(Ref, 4, Records) of
         {_, Channel, Handler, Ref} ->
-            retry(Srv, Channel, Handler, 0),
+            retry(Srv, Channel, Handler, 0, Rule),
             Recods1;
         _ ->
             Recods1

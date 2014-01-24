@@ -77,7 +77,7 @@ connect(State = #state{host = Host, port = Port}) ->
             gen_tcp:send(Socket, ensq_proto:encode(version)),
             State1#state{socket = Socket};
         E ->
-            io:format("[~s:~p]  target Error: ~p~n", [Host, Port, E]),
+            lager:warning("[~s:~p] target Error: ~p~n", [Host, Port, E]),
             State1
     end.
 %%--------------------------------------------------------------------
@@ -126,7 +126,7 @@ handle_cast({send, From, Msg}, State=#state{socket=S, topic=Topic}) ->
                 ok ->
                     {noreply, State#state{from = From}};
                 E ->
-                    io:format("[~s] Ooops: ~p~n", [Topic, E]),
+                    lager:warning("[~s] Ooops: ~p~n", [Topic, E]),
                     gen_server:reply(From, E),
                     {noreply, connect(State)}
             end
@@ -206,9 +206,9 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, Msg} ->
                     gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
-                    io:format("[msg:~s] ~p", [MsgID, Msg]);
+                    lager:debug("[msg:~s] ~p", [MsgID, Msg]);
                 Msg ->
-                    io:format("[msg] ~p", [Msg])
+                    lager:debug("[msg] ~p", [Msg])
             end;
         <<2:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
@@ -219,7 +219,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                     gen_server:reply(From, Msg)
             end;
         Msg ->
-            io:format("[unknown] ~p~n", [Msg])
+            lager:warning("[unknown] ~p~n", [Msg])
     end,
     data(State#state{buffer=Rest});
 
