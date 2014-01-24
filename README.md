@@ -47,7 +47,7 @@ The Erlang process model fits the nsq client concept quite well so:
 #### Using `ensq:init`
 One way to connect to nsq is using 
 
-#### Setting up topics seperately
+#### Setting up topics separately
 ```
 %% Setting up a topic sepperately.
 DiscoveryServers = [{"localhost", 4161}], %% Discovery Server
@@ -62,8 +62,11 @@ ensq_topic:discover(
 
 
 %% Sending a message to a topic
-ensq_topic:send(test, <<"hello there!">>).
+ensq:send(test, <<"hello there!">>).
 ```
+
+### Non registered cahnnels
+By default channels are registered processes that way it's possible to do things like `ensq:send(test, ...)` but for some situations registering the process and creating an `atom` for the name is not desirable to prevent poisoning the atom table. A dynamically created and destroyed channel would be an example of this. Passing a `binary` instead of a `atom` binary to `ensq_topic:discover/4` will solve this issue but loose the advantage of being able to call the process by name, it still is possible to either save the `PID` on creation or retrieve it from `ensq:list/1`.
 
 ### Configuration
 
@@ -72,4 +75,4 @@ ensq_topic:send(test, <<"hello there!">>).
 - `discover_jitter` Jitter in percent added or subtracted of the discovery interval, a value of `10` gives a total jitter of `20%` by adding between `-10%` and `+10%` (`10`).
 - `max_retry_delay` The maximum delay for retries in milliseconds (`10000`).
 - `retry_inital` Initial retry value in milliseconds (`1000`).
-- `retry_inc_type` The algoritm the retry interval progresses, it can either be `linear` making the retry delay `Attempt*retry_inital` milliseconds or `quadratic` making the retry delay `Attempt*Attempt*retry_inital`
+- `retry_inc_type` The algorithm the retry interval progresses, it can either be `linear` making the retry delay `Attempt*retry_inital` milliseconds or `quadratic` making the retry delay `Attempt*Attempt*retry_inital`

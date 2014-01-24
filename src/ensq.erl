@@ -1,5 +1,9 @@
 -module(ensq).
--export([init/1, start/0, list/0, send/2]).
+-export([start/0,
+         init/1,
+         producer/2, producer/3,
+         list/0,
+         send/2]).
 
 
 -export_type([
@@ -74,6 +78,31 @@ list() ->
 send(Topic, Msg) when is_binary(Msg),
                       is_pid(Topic) orelse is_atom(Topic) ->
     ensq_topic:send(Topic, Msg).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Creates a producer connection to a single host.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec producer(Channel::atom()|binary(),
+               Host::inet:ip_address() | inet:hostname(),
+               Port::inet:port_number()) ->
+                      {ok, Pid::pid()} | {error, Reason::term()}.
+producer(Channel, Host, Port) ->
+    producer(Channel, [{Host, Port}]).
+
+%%--------------------------------------------------------------------
+%% @doc
+%% Creates a producer connection to multiple hosts.
+%%
+%% @end
+%%--------------------------------------------------------------------
+-spec producer(Channel::atom()|binary(),
+               Targets :: host()) ->
+                      {ok, Pid::pid()} | {error, Reason::term()}.
+producer(Channel, Targets) ->
+    ensq_topic:discover(Channel, [], [], Targets).
 
 topic_from_sepc(DiscoveryServers, {Topic, Channels}) ->
     ensq_topic:discover(Topic, DiscoveryServers, Channels);
