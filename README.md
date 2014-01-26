@@ -49,7 +49,7 @@ One way to connect to nsq is using
 
 #### Setting up topics separately
 ```
-%% Setting up a topic sepperately.
+%% Setting up a topic separately.
 DiscoveryServers = [{"localhost", 4161}], %% Discovery Server
 Channels = [{<<"test">>,                  %% Channel name
 			  ensq_debug_callback},       %% Callback Module
@@ -58,14 +58,14 @@ ensq_topic:discover(
   test,                                   %% Topic
   DiscoveryServers,                       %% Discovery servers to use
   Channels,                               %% Channels to join.
-  [{"localhost", 4150}]).                 %% Targets for subing
+  [{"localhost", 4150}]).                 %% Targets for SUBing
 
 
 %% Sending a message to a topic
 ensq:send(test, <<"hello there!">>).
 ```
 
-### Non registered cahnnels
+### Non registered channels
 By default channels are registered processes that way it's possible to do things like `ensq:send(test, ...)` but for some situations registering the process and creating an `atom` for the name is not desirable to prevent poisoning the atom table. A dynamically created and destroyed channel would be an example of this. Passing a `binary` instead of a `atom` binary to `ensq_topic:discover/4` will solve this issue but loose the advantage of being able to call the process by name, it still is possible to either save the `PID` on creation or retrieve it from `ensq:list/1`.
 
 ### Configuration
