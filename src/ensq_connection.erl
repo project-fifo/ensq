@@ -64,20 +64,31 @@ init([Host, Port, Topic]) ->
                         host = Host, port = Port})}.
 
 connect(State = #state{host = Host, port = Port}) ->
+    lager:info("[~s:~p] Connecting.", [Host, Port]),
+
     case State#state.socket of
         undefined ->
             ok;
         Old ->
+            lager:info("[~s:~p] Closing as part of connect.", [Host, Port]),
             gen_tcp:close(Old)
     end,
     Opts = [{active, true}, binary, {deliver, term}, {packet, raw}],
     State1 = State#state{socket = undefined, buffer = <<>>, from = undefined},
     case gen_tcp:connect(Host, Port, Opts) of
         {ok, Socket} ->
-            gen_tcp:send(Socket, ensq_proto:encode(version)),
-            State1#state{socket = Socket};
+            case gen_tcp:send(Socket, ensq_proto:encode(version)) of
+                ok ->
+                    lager:info("[~s:~p] Connected to: ~p.",
+                               [Host, Port, Socket]),
+                     State1#state{socket = Socket};
+                E ->
+                    lager:info("[~s:~p] Connection errror: ~p.",
+                               [Host, Port, E]),
+                    State1
+            end;
         E ->
-            lager:warning("[~s:~p] target Error: ~p~n", [Host, Port, E]),
+            lager:error("[~s:~p] target Error: ~p~n", [Host, Port, E]),
             State1
     end.
 %%--------------------------------------------------------------------
@@ -124,11 +135,11 @@ handle_cast({send, From, Msg}, State=#state{socket=S, topic=Topic}) ->
         _ ->
             case gen_tcp:send(S1, ensq_proto:encode({publish, Topic, Msg})) of
                 ok ->
-                    {noreply, State#state{from = From}};
+                    {noreply, State1#state{from = From}};
                 E ->
                     lager:warning("[~s] Ooops: ~p~n", [Topic, E]),
                     gen_server:reply(From, E),
-                    {noreply, connect(State)}
+                    {noreply, connect(State1)}
             end
     end;
 
@@ -150,11 +161,15 @@ handle_info({tcp, S, Data}, State=#state{ socket = S, buffer=B}) ->
     State1 = data(State#state{buffer = <<B/binary, Data/binary>>}),
     {noreply, State1};
 handle_info({tcp, S, Data}, State=#state{socket = S0, buffer=B}) ->
+    lager:info("[~s:~p] Got data from ~p but socket should be ~p.",
+               [State#state.host, State#state.port, S, S0]),
+
     State1 = data(State#state{buffer = <<B/binary, Data/binary>>, socket = S}),
-    gen_tcp:close(S),
     {noreply, State1#state{socket = S0}};
 
 handle_info({tcp_closed, S}, State = #state{socket = S}) ->
+    lager:info("[~s:~p] Remote side hung up.",
+                [State#state.host, State#state.port]),
     {noreply, connect(State)};
 
 handle_info(_Info, State) ->
@@ -206,9 +221,9 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             case ensq_proto:decode(Data) of
                 {message, _Timestamp, MsgID, Msg} ->
                     gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
-                    lager:debug("[msg:~s] ~p", [MsgID, Msg]);
+                    lager:info("[msg:~s] ~p", [MsgID, Msg]);
                 Msg ->
-                    lager:debug("[msg] ~p", [Msg])
+                    lager:info("[msg] ~p", [Msg])
             end;
         <<2:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
