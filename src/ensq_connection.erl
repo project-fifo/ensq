@@ -163,7 +163,6 @@ handle_info({tcp, S, Data}, State=#state{ socket = S, buffer=B}) ->
 handle_info({tcp, S, Data}, State=#state{socket = S0, buffer=B}) ->
     lager:info("[~s:~p] Got data from ~p but socket should be ~p.",
                [State#state.host, State#state.port, S, S0]),
-
     State1 = data(State#state{buffer = <<B/binary, Data/binary>>, socket = S}),
     {noreply, State1#state{socket = S0}};
 
