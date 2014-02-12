@@ -1,0 +1,32 @@
+%% -*- erlang -*-
+%% @doc Erlang NSQ client.
+
+%% @doc Interval in which discovery servers are polled.
+{mapping, "nsq.discover_interval", "ensq.discover_interval",
+ [{default, "10s"},
+  {datatype, {duration, ms}}]}.
+
+%% @doc Percent of jitter.
+{mapping, "nsq.discover_jitter", "ensq.discover_jitter",
+ [{default, 10},
+  {datatype, integer}]}.
+
+%% @doc Maximum messages consued at a time.
+{mapping, "nsq.max_in_flight", "ensq.max_in_flight",
+ [{default, 100},
+  {datatype, integer}]}.
+
+%% @doc Interval in which discovery servers are polled.
+{mapping, "nsq.retry_inital", "ensq.retry_inital",
+ [{default, "1s"},
+  {datatype, {duration, ms}}]}.
+
+%% @doc Interval in which discovery servers are polled.
+{mapping, "nsq.max_retry_delay", "ensq.max_retry_delay",
+ [{default, "10s"},
+  {datatype, {duration, ms}}]}.
+
+%% @doc The way retry delays increase.
+{mapping, "nsq.retry_algo", "ensq.retry_inc_type",
+ [{datatype, {enum, [linear, quadratic]}},
+  {default, linear}]}.
