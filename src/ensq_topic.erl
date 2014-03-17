@@ -162,8 +162,8 @@ build_opts(Opts) ->
                    retry_rule = RetryRule},
     build_opts(Opts, State).
 
-build_opts([_ | R], State) ->
-    build_opts(R, State);
+%% build_opts([_ | R], State) ->
+%%     build_opts(R, State);
 
 build_opts([], State) ->
     State.
@@ -354,7 +354,7 @@ add_host({Host, Port}, State = #state{servers = Srvs, channels = Cs, ref2srv = R
                      Channel, Handler} || {Channel, Handler} <- Cs],
             Pids1 = [{Pid, Channel, Handler, erlang:monitor(process, Pid)} ||
                         {{ok, Pid}, Channel, Handler} <- Pids],
-            Refs = [{Ref, {Host, Port}} || {_, _, _, Ref, _} <- Pids1],
+            Refs = [{Ref, {Host, Port}} || {_, _, _, Ref} <- Pids1],
             State#state{servers = orddict:store({Host, Port}, Pids1, Srvs),
                         ref2srv = Refs ++ R2S}
     end.

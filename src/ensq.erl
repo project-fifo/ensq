@@ -99,7 +99,7 @@ producer(Channel, Host, Port) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec producer(Channel::atom()|binary(),
-               Targets :: host()) ->
+               Targets :: [host()]) ->
                       {ok, Pid::pid()} | {error, Reason::term()}.
 producer(Channel, Targets) ->
     ensq_topic:discover(Channel, [], [], Targets).

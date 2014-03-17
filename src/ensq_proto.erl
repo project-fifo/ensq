@@ -2,35 +2,19 @@
 
 -export([encode/1, decode/1]).
 
--define(IDENTITY_FIELD(F, J), case I#identity.F of
-                                undefined ->
-                                    J;
-                                _ ->
-                                    [{F, I#identity.F} | J]
-                            end).
+-include("ensq.hrl").
+
+-define(IDENTITY_FIELD(F, J), [{F, I#identity.F} | J]).
+
+-define(IDENTITY_FIELD_OPT(F, J), case I#identity.F of
+                                      undefined ->
+                                          J;
+                                      _ ->
+                                          [{F, I#identity.F} | J]
+                                  end).
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 -endif.
-
--record(identity, {
-          short_id = undefined :: undefined | binary(),
-          long_id = undefined :: undefined | binary(),
-          feature_negotiation = false :: boolean(),
-          heartbeat_interval = -1 :: -1 | non_neg_integer(),
-          output_buffer_size = 16384 :: non_neg_integer(),
-          output_buffer_timeout = 250 :: non_neg_integer(),
-          tls_v1 = false :: boolean(),
-          snappy = false :: boolean(),
-          deflate = false :: boolean(),
-          deflate_level = 1 :: pos_integer(),
-          sample_rate = 0 :: non_neg_integer()
-         }).
--record(message, {
-          timestamp :: non_neg_integer(),
-          message_id :: binary(),
-          attempt :: non_neg_integer(),
-          message :: binary()
-         }).
 
 decode(<<"OK">>) -> ok;
 decode(<<"E_INVALID">>) -> {error, invalid};
@@ -97,7 +81,8 @@ encode(_) ->
 i2b(I) ->
     list_to_binary(integer_to_list(I)).
 identity_to_json(#identity{} = I) ->
-    J0 = ?IDENTITY_FIELD(short_id, []),
+    J = ?IDENTITY_FIELD_OPT(short_id, []),
+    J0 = ?IDENTITY_FIELD_OPT(long_id, J),
     J1 = ?IDENTITY_FIELD(feature_negotiation, J0),
     J2 = ?IDENTITY_FIELD(heartbeat_interval, J1),
     J3 = ?IDENTITY_FIELD(output_buffer_size, J2),

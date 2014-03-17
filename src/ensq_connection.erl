@@ -10,6 +10,8 @@
 
 -behaviour(gen_server).
 
+-include("ensq.hrl").
+
 %% API
 -export([open/3,
          start_link/3,
@@ -210,7 +212,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             gen_tcp:send(S, ensq_proto:encode(nop));
         <<0:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
-                {message, _Timestamp, MsgID, Msg} ->
+                #message{message_id=MsgID, message=Msg} ->
                     gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
                     gen_server:reply(From, Msg);
                 Msg ->
@@ -218,7 +220,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             end;
         <<1:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
-                {message, _Timestamp, MsgID, Msg} ->
+                #message{message_id=MsgID, message=Msg} ->
                     gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
                     lager:info("[msg:~s] ~p", [MsgID, Msg]);
                 Msg ->
@@ -226,7 +228,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             end;
         <<2:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
-                {message, _Timestamp, MsgID, Msg} ->
+                #message{message_id=MsgID, message=Msg} ->
                     gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
                     gen_server:reply(From, Msg);
                 Msg ->

@@ -10,6 +10,8 @@
 
 -behaviour(gen_server).
 
+-include("ensq.hrl").
+
 %% API
 -export([open/5, ready/2,
          start_link/5, recheck_ready_count/0,
@@ -231,7 +233,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             C:response(ensq_proto:decode(Msg));
         <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
-                {message, _Timestamp, MsgID, Msg} ->
+                #message{message_id=MsgID, message=Msg} ->
                     case C:message(Msg) of
                         ok ->
                             gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
@@ -243,7 +245,7 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
             end;
         <<?FRAME_TYPE_MESSAGE:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
-                {message, _Timestamp, MsgID, _Attempt, Msg} ->
+                #message{message_id=MsgID, message=Msg} ->
                     TouchFn = fun() ->
                                       gen_tcp:send(S, ensq_proto:encode({touch, MsgID}))
                               end,
