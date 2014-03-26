@@ -110,14 +110,20 @@ handle_call(getrc, {From, _}, State=#state{channels=Cs, max_in_flight=Max}) ->
         {0, From, _Ref} ->
             {reply, {ok, 0}, State};
         %% We got a receive count!
-        {N, From, _Ref} ->
+        {N, From, Ref} ->
             %% If we only have one channel we slowsly scale this up
             case length(Cs) of
                 1 ->
                     RC1 = erlang:min(Max*0.9, N*1.1),
                     {reply, {ok, erlang:trunc(RC1)}, State};
-                _ ->
-                    {reply, {ok, N}, State}
+                L ->
+                    Avg = Max / L,
+                    InUse = lists:sum([Nu || {Nu, _, _} <- Cs]),
+                    Free = Max - InUse,
+                    NewN = erlang:min(Free, Avg),
+                    CsN = lists:keydelete(Free, 2, Cs),
+                    {reply, {ok, NewN},
+                     State#state{channels=[{NewN, From, Ref}|CsN]}}
             end
     end;
 
