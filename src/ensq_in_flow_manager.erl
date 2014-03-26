@@ -121,7 +121,7 @@ handle_call(getrc, {From, _}, State=#state{channels=Cs, max_in_flight=Max}) ->
                     InUse = lists:sum([Nu || {Nu, _, _} <- Cs]),
                     Free = Max - InUse,
                     NewN = erlang:min(Free, Avg),
-                    CsN = lists:keydelete(Free, 2, Cs),
+                    CsN = lists:keydelete(From, 2, Cs),
                     {reply, {ok, NewN},
                      State#state{channels=[{NewN, From, Ref}|CsN]}}
             end
