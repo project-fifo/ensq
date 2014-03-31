@@ -40,7 +40,6 @@ send(Pid, From, Topic) ->
 %% @doc
 %% Starts the server
 %%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
 start_link(Host, Port, Topic) ->

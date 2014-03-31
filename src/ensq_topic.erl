@@ -99,7 +99,6 @@ tick(Pid) ->
 %% @doc
 %% Starts the server
 %%
-%% @spec start_link() -> {ok, Pid} | ignore | {error, Error}
 %% @end
 %%--------------------------------------------------------------------
 start_link(Topic, Spec) when is_binary(Topic) ->
@@ -250,7 +249,7 @@ handle_cast({add_channel, Channel, Handler},
                         E ->
                             lager:warning("Failed opening channel: ~p~n", [E]),
                             Pids
-                        end
+                    end
             end, Ss),
     {noreply, State#state{servers = Ss1, channels = [{Channel, Handler} | Cs],
                           ref2srv = build_ref2srv(Ss1)}};
@@ -273,7 +272,7 @@ handle_cast(tick, State = #state{
                                     add_discovered(JSON, Acc);
                                 _ ->
                                     Acc
-                                end
+                            end
                     end, State, Hosts),
     %% Add +/- 10% Jitter for the next discovery
     D = round(I/State#state.jitter),
@@ -295,7 +294,7 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({'DOWN', Ref, _, _, _}, State = 
+handle_info({'DOWN', Ref, _, _, _}, State =
                 #state{servers=Ss, ref2srv=R2S, retry_rule = Rule}) ->
     State1 = State#state{ref2srv = lists:keydelete(Ref, 1, R2S)},
     {Ref, Srv} = lists:keyfind(Ref, 1, R2S),
