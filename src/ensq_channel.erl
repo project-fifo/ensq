@@ -31,7 +31,8 @@
 -define(FRAME_TYPE_MESSAGE, 2).
 
 -record(state, {socket, buffer, current_ready_count=1,
-                ready_count=1, handler=ensq_debug_callback}).
+                ready_count=1, handler=ensq_debug_callback,
+                client_state = undefined}).
 
 %%%===================================================================
 %%% API
@@ -86,7 +87,7 @@ init([Host, Port, Topic, Channel, Handler]) ->
             gen_tcp:send(S, ensq_proto:encode(version)),
 
             lager:debug("[channel|~s:~p] Subscribing to ~s/~s.~n",
-                      [Host, Port, Topic, Channel]),
+                        [Host, Port, Topic, Channel]),
             gen_tcp:send(S, ensq_proto:encode({subscribe, Topic, Channel})),
 
             lager:debug("[channel|~s:~p] Waiting for ack.~n", [Host, Port]),
@@ -98,7 +99,9 @@ init([Host, Port, Topic, Channel, Handler]) ->
             gen_tcp:send(S, ensq_proto:encode({ready, 1})),
 
             lager:debug("[~s:~p] Done initializing.~n", [Host, Port]),
-            {ok, #state{socket = S, buffer = <<>>, handler = Handler}};
+            {ok, CState} = Handler:init(),
+            {ok, #state{socket = S, buffer = <<>>, handler = Handler,
+                        client_state = CState}};
         E ->
             lager:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
             {stop, E}
@@ -161,8 +164,11 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC}) ->
-    State1 = data(State#state{buffer = <<B/binary, Data/binary>>}),
+handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC,
+                                         handler = C, client_state = CState}) ->
+    {ok, CState1} = C:new_frame(CState),
+    State1 = data(State#state{buffer = <<B/binary, Data/binary>>,
+                              client_state = CState1}),
     State2 = case State1#state.current_ready_count of
                  N when N < (RC / 4) ->
                      %% We don't want to ask for a propper new RC every time
@@ -224,45 +230,55 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
-                    socket = S, handler = C, current_ready_count = RC}) ->
-    case Raw of
-        <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
-            gen_tcp:send(S, ensq_proto:encode(nop));
-        <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
-            C:response(ensq_proto:decode(Msg));
-        <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
-            case ensq_proto:decode(Data) of
-                #message{message_id=MsgID, message=Msg} ->
-                    case C:message(Msg) of
-                        ok ->
-                            gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
-                        O ->
-                            lager:warning("[channel|~p] ~p -> Not finishing ~s",
-                                          [O, C, MsgID]),
-                            ok
-                    end
-            end;
-        <<?FRAME_TYPE_MESSAGE:32/integer, Data/binary>> ->
-            case ensq_proto:decode(Data) of
-                #message{message_id=MsgID, message=Msg} ->
-                    TouchFn = fun() ->
-                                      gen_tcp:send(S, ensq_proto:encode({touch, MsgID}))
-                              end,
-                    case C:message(Msg, TouchFn) of
-                        ok ->
-                            gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
-                        requeue ->
-                            gen_tcp:send(S, ensq_proto:encode({requeue, MsgID}))
-                    end;
-                Msg ->
-                    lager:warning("[channel|~p] Unknown message ~p.",
-                                  [C, Msg])
-            end;
-        Msg ->
-            lager:warning("[channel|~p] Unknown message ~p.",
-                          [C, Msg])
-    end,
-    data(State#state{buffer=Rest, current_ready_count=RC - 1});
+                    socket = S, handler = C, current_ready_count = RC,
+                    client_state = CState}) ->
+    State1 = State#state{buffer=Rest, current_ready_count=RC - 1},
+    NewCState =
+        case Raw of
+            <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
+                gen_tcp:send(S, ensq_proto:encode(nop)),
+                CState;
+            <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
+                {ok, CState1} = C:response(ensq_proto:decode(Msg), CState),
+                CState1;
+            <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
+                case ensq_proto:decode(Data) of
+                    #message{message_id=MsgID, message=Msg} ->
+                        case C:error(Msg, CState) of
+                            {ok, CState1} ->
+                                gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
+                                CState1;
+                            {O, CState1} ->
+                                lager:warning("[channel|~p] ~p -> Not finishing ~s",
+                                              [O, C, MsgID]),
+                                CState1
+                        end
+                end;
+            <<?FRAME_TYPE_MESSAGE:32/integer, Data/binary>> ->
+                case ensq_proto:decode(Data) of
+                    #message{message_id=MsgID, message=Msg} ->
+                        TouchFn = fun() ->
+                                          gen_tcp:send(S, ensq_proto:encode({touch, MsgID}))
+                                  end,
+                        case C:message(Msg, TouchFn, CState) of
+                            {ok, CState1} ->
+                                gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
+                                CState1;
+                            {requeue, CState1} ->
+                                gen_tcp:send(S, ensq_proto:encode({requeue, MsgID})),
+                                CState1
+                        end;
+                    Msg ->
+                        lager:warning("[channel|~p] Unknown message ~p.",
+                                      [C, Msg]),
+                        CState
+                end;
+            Msg ->
+                lager:warning("[channel|~p] Unknown message ~p.",
+                              [C, Msg]),
+                CState
+        end,
+    data(State1#state{client_state = NewCState});
 
 data(State) ->
     State.
