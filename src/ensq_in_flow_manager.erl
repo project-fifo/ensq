@@ -26,7 +26,7 @@
 %%%===================================================================
 
 getrc() ->
-    gen_server:call(?SERVER, getrc).
+    gen_server:cast(?SERVER, {getrc, self()}).
 %%--------------------------------------------------------------------
 %% @doc
 %% Starts the server
@@ -70,7 +70,22 @@ init([]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
-handle_call(getrc, {From, _}, State=#state{channels=Cs, max_in_flight=Max}) ->
+handle_call(_Request, _From, State) ->
+    Reply = ok,
+    {reply, Reply, State}.
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Handling cast messages
+%%
+%% @spec handle_cast(Msg, State) -> {noreply, State} |
+%%                                  {noreply, State, Timeout} |
+%%                                  {stop, Reason, State}
+%% @end
+%%--------------------------------------------------------------------
+
+handle_cast({getrc, From}, State=#state{channels=Cs, max_in_flight=Max}) ->
     case lists:keyfind(From, 2, Cs) of
         false ->
             InUse = lists:sum([N || {N, _, _} <- Cs]),
@@ -105,39 +120,27 @@ handle_call(getrc, {From, _}, State=#state{channels=Cs, max_in_flight=Max}) ->
                         {RC, Cs1}
                 end,
             Ref = erlang:monitor(process, From),
-            {reply, {ok, N}, State#state{channels=[{N, From, Ref}|CsN]}};
+            ensq_channel:ready(From, N),
+            {noreply, State#state{channels=[{N, From, Ref}|CsN]}};
         %% We got a receive count!
         {N, From, Ref} ->
             %% If we only have one channel we slowsly scale this up
             case length(Cs) of
                 1 ->
                     RC1 = erlang:min(Max*0.9, N*1.1),
-                    {reply, {ok, erlang:trunc(RC1)}, State};
+                    ensq_channel:ready(From, erlang:trunc(RC1)),
+                    {noreply, State};
                 L ->
                     Avg = Max / L,
                     InUse = lists:sum([Nu || {Nu, _, _} <- Cs]),
                     Free = Max - InUse,
                     NewN = erlang:trunc(erlang:min(Free, Avg)),
                     CsN = lists:keydelete(From, 2, Cs),
-                    {reply, {ok, NewN},
-                     State#state{channels=[{NewN, From, Ref}|CsN]}}
+                    ensq_channel:ready(From, NewN),
+                    {noreply, State#state{channels=[{NewN, From, Ref}|CsN]}}
             end
     end;
 
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
 handle_cast(_Msg, State) ->
     {noreply, State}.
 

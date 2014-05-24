@@ -132,6 +132,10 @@ handle_call(_Request, _From, State) ->
 %%                                  {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_cast({ready, 0}, State) ->
+    recheck_ready_count(),
+    {noreply, State#state{ready_count = 0, current_ready_count=0}};
+
 handle_cast({ready, N}, State = #state{socket = S}) ->
     gen_tcp:send(S, ensq_proto:encode({ready, N})),
     {noreply, State#state{ready_count = N, current_ready_count=N}};
@@ -168,20 +172,14 @@ handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC}) ->
                      %% We don't want to ask for a propper new RC every time
                      %% this keeps the laod of the flow manager by guessing
                      %% we'll get the the same value back anyway.
-                     {ok, RC1} = case random:uniform(10) of
-                                     10 ->
-                                         ensq_in_flow_manager:getrc();
-                                     _ ->
-                                         {ok, RC}
-                                 end,
-                     case RC1 of
-                         0 ->
-                             recheck_ready_count();
+                     case random:uniform(10) of
+                         10 ->
+                             ensq_in_flow_manager:getrc();
                          _ ->
                              ok
                      end,
-                     gen_tcp:send(S, ensq_proto:encode({ready, RC1})),
-                     State1#state{current_ready_count = RC1, ready_count=RC1};
+                     gen_tcp:send(S, ensq_proto:encode({ready, RC})),
+                     State1#state{current_ready_count = RC, ready_count=RC};
                  _ ->
                      State1
              end,
