@@ -16,7 +16,8 @@
 -export([open/5, ready/2,
          start_link/5, recheck_ready_count/0,
          recheck_ready/1,
-         recheck_ready_count/1]).
+         recheck_ready_count/1,
+         close/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -51,6 +52,9 @@ recheck_ready_count(Pid) ->
 
 recheck_ready(Pid) ->
     gen_server:cast(Pid, recheck_ready).
+
+close(Pid) ->
+    gen_server:call(Pid, close).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -118,6 +122,9 @@ init([Host, Port, Topic, Channel, Handler]) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call(close, _From, State) ->
+    {stop, normal, ok, State};
+
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -204,7 +211,8 @@ handle_info(Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, _State = #state{socket=S}) ->
+    gen_tcp:close(S),
     ok.
 
 %%--------------------------------------------------------------------

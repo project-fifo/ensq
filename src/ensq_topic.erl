@@ -11,7 +11,7 @@
 -behaviour(gen_server).
 
 %% API
--export([get_info/1, list/0,
+-export([get_info/1, list/0, stop/1,
          discover/3, discover/4,
          add_channel/3,
          send/2,
@@ -49,6 +49,9 @@
 list() ->
     Children = supervisor:which_children(ensq_topic_sup),
     [get_info(Pid) || {_,Pid,_,_} <- Children].
+
+stop(Pid) ->
+    gen_server:call(Pid, stop).
 
 get_info(Pid) ->
     gen_server:call(Pid, get_info).
@@ -183,10 +186,15 @@ build_opts([], State) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call(stop, _From, State) ->
+    {stop, normal, State};
+
 handle_call({send, _}, _From, State = #state{targets = [], targets_rev = []}) ->
     {reply, {error, not_connected}, State};
+
 handle_call({send, Msg}, From, State=#state{targets = [], targets_rev = Rev}) ->
     handle_call({send, Msg}, From, State#state{targets=Rev, targets_rev=[]});
+
 handle_call({send, Msg}, From, State =
                 #state{targets=[Pid | Tr], targets_rev=Rev}
            ) when is_pid(Pid) ->
@@ -320,8 +328,17 @@ handle_info(_, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason,
+          _ = #state{
+                 targets = Ts,
+                 servers = Ss
+                }) ->
+    [ensq_connection:close(T) || T <- Ts],
+    Ss1 = [Pids || {_, Pids} <- Ss],
+    Ss2 = lists:flatten(Ss1),
+    [ensq_channel:close(Pid) ||{Pid, _, _, _} <- Ss2],
     ok.
+
 
 %%--------------------------------------------------------------------
 %% @private

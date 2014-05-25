@@ -13,7 +13,7 @@
 -include("ensq.hrl").
 
 %% API
--export([open/3,
+-export([open/3, close/1,
          start_link/3,
          send/3]).
 
@@ -35,6 +35,9 @@ open(Host, Port, Topic) ->
 
 send(Pid, From, Topic) ->
     gen_server:cast(Pid, {send, From, Topic}).
+
+close(Pid) ->
+    gen_server:call(Pid, close).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -106,6 +109,9 @@ connect(State = #state{host = Host, port = Port}) ->
 %%                                   {stop, Reason, State}
 %% @end
 %%--------------------------------------------------------------------
+handle_call(close, _From, State) ->
+    {stop, normal, ok, State};
+
 handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
@@ -186,7 +192,8 @@ handle_info(_Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State) ->
+terminate(_Reason, _State = #state{socket = S}) ->
+    gen_tcp:close(S),
     ok.
 
 %%--------------------------------------------------------------------
