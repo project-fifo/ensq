@@ -165,8 +165,9 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC}) ->
-    State1 = data(State#state{buffer = <<B/binary, Data/binary>>}),
+handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC,
+                                         current_ready_count = CRC}) ->
+    State1 = data(<<B/binary, Data/binary>>, CRC, State),
     State2 = case State1#state.current_ready_count of
                  N when N < (RC / 4) ->
                      %% We don't want to ask for a propper new RC every time
@@ -221,25 +222,9 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
-                    socket = S, handler = C, current_ready_count = RC}) ->
+data(<<Size:32/integer, Raw:Size/binary, Rest/binary>>, RC,
+     State = #state{socket = S, handler = C}) ->
     case Raw of
-        <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
-            gen_tcp:send(S, ensq_proto:encode(nop));
-        <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
-            C:response(ensq_proto:decode(Msg));
-        <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
-            case ensq_proto:decode(Data) of
-                #message{message_id=MsgID, message=Msg} ->
-                    case C:message(Msg) of
-                        ok ->
-                            gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
-                        O ->
-                            lager:warning("[channel|~p] ~p -> Not finishing ~s",
-                                          [O, C, MsgID]),
-                            ok
-                    end
-            end;
         <<?FRAME_TYPE_MESSAGE:32/integer, Data/binary>> ->
             case ensq_proto:decode(Data) of
                 #message{message_id=MsgID, message=Msg} ->
@@ -256,11 +241,27 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                     lager:warning("[channel|~p] Unknown message ~p.",
                                   [C, Msg])
             end;
+        <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
+            gen_tcp:send(S, ensq_proto:encode(nop));
+        <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
+            C:response(ensq_proto:decode(Msg));
+        <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
+            case ensq_proto:decode(Data) of
+                #message{message_id=MsgID, message=Msg} ->
+                    case C:message(Msg) of
+                        ok ->
+                            gen_tcp:send(S, ensq_proto:encode({finish, MsgID}));
+                        O ->
+                            lager:warning("[channel|~p] ~p -> Not finishing ~s",
+                                          [O, C, MsgID]),
+                            ok
+                    end
+            end;
         Msg ->
             lager:warning("[channel|~p] Unknown message ~p.",
                           [C, Msg])
     end,
-    data(State#state{buffer=Rest, current_ready_count=RC - 1});
+    data(Rest, RC - 1, State);
 
-data(State) ->
-    State.
+data(Rest, RC, State) ->
+    State#state{buffer=Rest, current_ready_count=RC - 1}.
