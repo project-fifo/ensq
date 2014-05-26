@@ -8,20 +8,17 @@
 %%%-------------------------------------------------------------------
 -module(ensq_channel).
 
--behaviour(gen_server).
-
 -include("ensq.hrl").
 
 %% API
 -export([open/5, ready/2,
-         start_link/5, recheck_ready_count/0,
+         recheck_ready_count/0,
          recheck_ready/1,
          recheck_ready_count/1,
          close/1]).
 
 %% gen_server callbacks
--export([init/1, handle_call/3, handle_cast/2, handle_info/2,
-         terminate/2, code_change/3]).
+-export([init/7]).
 
 -define(SERVER, ?MODULE).
 
@@ -39,31 +36,33 @@
 %%%===================================================================
 
 open(Host, Port, Topic, Channel, Handler) ->
-    ensq_channel_sup:start_child(Host, Port, Topic, Channel, Handler).
+    Ref = make_ref(),
+    Pid = spawn(ensq_channel, init, [self(), Ref, Host, Port, Topic, Channel, Handler]),
+    receive
+        {Ref, ok} ->
+            {ok, Pid};
+        {Ref, E} ->
+            E
+    after 1000 ->
+            close(Pid),
+            {error, timeout}
+    end.
+
 
 ready(Pid, N) ->
-    gen_server:cast(Pid, {ready, N}).
+    Pid ! {ready, N}.
 
 recheck_ready_count() ->
     recheck_ready_count(self()).
 
 recheck_ready_count(Pid) ->
-    timer:apply_after(?RECHECK_INTERVAL, ensq_channel, recheck_ready, [Pid]).
+    erlang:send_after(?RECHECK_INTERVAL, Pid, recheck_ready).
 
 recheck_ready(Pid) ->
-    gen_server:cast(Pid, recheck_ready).
+    Pid ! recheck_ready.
 
 close(Pid) ->
-    gen_server:call(Pid, close).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%%
-%% @end
-%%--------------------------------------------------------------------
-start_link(Host, Port, Topic, Channel, Handler) ->
-    gen_server:start_link(?MODULE, [Host, Port, Topic, Channel, Handler], []).
+    Pid ! close.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -80,7 +79,7 @@ start_link(Host, Port, Topic, Channel, Handler) ->
 %%                     {stop, Reason}
 %% @end
 %%--------------------------------------------------------------------
-init([Host, Port, Topic, Channel, Handler]) ->
+init(From, Ref, Host, Port, Topic, Channel, Handler) ->
     Opts = [{active, false}, binary, {deliver, term}, {packet, raw}],
     case gen_tcp:connect(Host, Port, Opts) of
         {ok, S} ->
@@ -102,103 +101,62 @@ init([Host, Port, Topic, Channel, Handler]) ->
             gen_tcp:send(S, ensq_proto:encode({ready, 1})),
 
             lager:debug("[~s:~p] Done initializing.~n", [Host, Port]),
-            {ok, #state{socket = S, buffer = <<>>, handler = Handler}};
+            From ! {Ref, ok},
+            State = #state{socket = S, buffer = <<>>, handler = Handler},
+            loop(State);
         E ->
             lager:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
-            {stop, E}
+            From ! {Ref, E}
     end.
 
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling call messages
-%%
-%% @spec handle_call(Request, From, State) ->
-%%                                   {reply, Reply, State} |
-%%                                   {reply, Reply, State, Timeout} |
-%%                                   {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, Reply, State} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_call(close, _From, State) ->
-    {stop, normal, ok, State};
-
-handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling cast messages
-%%
-%% @spec handle_cast(Msg, State) -> {noreply, State} |
-%%                                  {noreply, State, Timeout} |
-%%                                  {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-handle_cast({ready, 0}, State) ->
-    recheck_ready_count(),
-    {noreply, State#state{ready_count = 0, current_ready_count=0}};
-
-handle_cast({ready, N}, State = #state{socket = S}) ->
-    gen_tcp:send(S, ensq_proto:encode({ready, N})),
-    {noreply, State#state{ready_count = N, current_ready_count=N}};
-
-handle_cast(recheck_ready, State = #state{socket = S, ready_count=0}) ->
-    State1 = case ensq_in_flow_manager:getrc() of
-                 {ok, 0} ->
-                     recheck_ready_count(),
-                     State;
-                 {ok, N} ->
-                     gen_tcp:send(S, ensq_proto:encode({ready, N})),
-                     State#state{current_ready_count = N, ready_count=N}
-             end,
-    {noreply, State1};
-
-handle_cast(_Msg, State) ->
-    {noreply, State}.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Handling all non call/cast messages
-%%
-%% @spec handle_info(Info, State) -> {noreply, State} |
-%%                                   {noreply, State, Timeout} |
-%%                                   {stop, Reason, State}
-%% @end
-%%--------------------------------------------------------------------
-
-handle_info({tcp, S, Data}, State=#state{socket=S, buffer=B, ready_count=RC,
-                                         current_ready_count = CRC}) ->
-    State1 = data(<<B/binary, Data/binary>>, CRC, State, <<>>),
-    State2 = case State1#state.current_ready_count of
-                 N when N < (RC / 4) ->
-                     %% We don't want to ask for a propper new RC every time
-                     %% this keeps the laod of the flow manager by guessing
-                     %% we'll get the the same value back anyway.
-                     case random:uniform(10) of
-                         10 ->
-                             ensq_in_flow_manager:getrc();
-                         _ ->
-                             ok
+loop(State) ->
+    receive
+        close ->
+            terminate(State);
+        {ready, 0} ->
+            recheck_ready_count(),
+            loop(State#state{ready_count = 0, current_ready_count=0});
+        {ready, N} ->
+            gen_tcp:send(State#state.socket, ensq_proto:encode({ready, N})),
+            loop(State#state{ready_count = N, current_ready_count=N});
+        recheck_ready ->
+            State1 = case ensq_in_flow_manager:getrc() of
+                         {ok, 0} ->
+                             recheck_ready_count(),
+                             State;
+                         {ok, N} ->
+                             gen_tcp:send(State#state.socket, ensq_proto:encode({ready, N})),
+                             State#state{current_ready_count = N, ready_count=N}
                      end,
-                     gen_tcp:send(S, ensq_proto:encode({ready, RC})),
-                     State1#state{current_ready_count = RC, ready_count=RC};
-                 _ ->
-                     State1
-             end,
-    {noreply, State2};
+            loop(State1);
+        {tcp, S, Data} ->
+            #state{socket=S, buffer=B, ready_count=RC,
+                   current_ready_count = CRC} = State,
+            State1 = data(<<B/binary, Data/binary>>, CRC, State, <<>>),
+            State2 = case State1#state.current_ready_count of
+                         N when N < (RC / 4) ->
+                             %% We don't want to ask for a propper new RC every time
+                             %% this keeps the laod of the flow manager by guessing
+                             %% we'll get the the same value back anyway.
+                             case random:uniform(10) of
+                                 10 ->
+                                     ensq_in_flow_manager:getrc();
+                                 _ ->
+                                     ok
+                             end,
+                             gen_tcp:send(S, ensq_proto:encode({ready, RC})),
+                             State1#state{current_ready_count = RC, ready_count=RC};
+                         _ ->
+                             State1
+                     end,
+            loop(State2);
 
-handle_info({tcp_closed, S}, State = #state{socket = S}) ->
-    {stop, normal, State};
-
-handle_info(Info, State) ->
-    lager:warning("Unknown message: ~p~n", [Info]),
-    {noreply, State}.
+        {tcp_closed, S} when S =:= State#state.socket ->
+            terminate(State);
+        Info ->
+            lager:warning("Unknown message: ~p~n", [Info]),
+            loop(State)
+    end.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -211,20 +169,8 @@ handle_info(Info, State) ->
 %% @spec terminate(Reason, State) -> void()
 %% @end
 %%--------------------------------------------------------------------
-terminate(_Reason, _State = #state{socket=S}) ->
-    gen_tcp:close(S),
-    ok.
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Convert process state when code is changed
-%%
-%% @spec code_change(OldVsn, State, Extra) -> {ok, NewState}
-%% @end
-%%--------------------------------------------------------------------
-code_change(_OldVsn, State, _Extra) ->
-    {ok, State}.
+terminate(_State = #state{socket=S}) ->
+    gen_tcp:close(S).
 
 %%%===================================================================
 %%% Internal functions
