@@ -1,5 +1,7 @@
 -module(ensq_proto).
 
+-compile(inline).
+
 -export([encode/1, decode/1]).
 
 -include("ensq.hrl").

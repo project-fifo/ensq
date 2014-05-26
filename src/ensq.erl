@@ -3,7 +3,8 @@
          init/1,
          producer/2, producer/3,
          list/0,
-         send/2]).
+         send/2,
+         touch/1]).
 
 
 -export_type([
@@ -110,3 +111,6 @@ topic_from_sepc(DiscoveryServers, {Topic, Channels, []}) ->
     ensq_topic:discover(Topic, DiscoveryServers, Channels);
 topic_from_sepc(DiscoveryServers, {Topic, Channels, Targets}) ->
     ensq_topic:discover(Topic, DiscoveryServers, Channels, Targets).
+
+touch({S, MsgID}) ->
+    gen_tcp:send(S, ensq_proto:encode({touch, MsgID})).

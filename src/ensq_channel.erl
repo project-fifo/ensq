@@ -112,6 +112,7 @@ init(From, Ref, Host, Port, Topic, Channel, Handler) ->
 loop(State) ->
     receive
         close ->
+            gen_tcp:send(State#state.socket, ensq_proto:encode(close)),
             terminate(State);
         {ready, 0} ->
             recheck_ready_count(),
@@ -176,43 +177,33 @@ terminate(_State = #state{socket=S}) ->
 %%% Internal functions
 %%%===================================================================
 
+
 data(<<Size:32/integer, Raw:Size/binary, Rest/binary>>, RC,
      State = #state{socket = S,handler = C}, Replies) ->
     Reply =
         case Raw of
-            <<?FRAME_TYPE_MESSAGE:32/integer, Data/binary>> ->
-                case ensq_proto:decode(Data) of
-                    #message{message_id=MsgID, message=Msg} ->
-                        TouchFn = fun() ->
-                                          gen_tcp:send(S, ensq_proto:encode({touch, MsgID}))
-                                  end,
-                        case C:message(Msg, TouchFn) of
-                            ok ->
-                                ensq_proto:encode({finish, MsgID});
-                            requeue ->
-                                ensq_proto:encode({requeue, MsgID})
-                        end;
-                    Msg ->
-                        lager:warning("[channel|~p] Unknown message ~p.",
-                                      [C, Msg]),
-                        <<>>
+            <<?FRAME_TYPE_MESSAGE:32/integer, _Timestamp:64/integer,
+              _Attempt:16/integer, MsgID:16/binary, Msg/binary>> ->
+                case C:message(Msg, {S, MsgID}) of
+                    ok ->
+                        ensq_proto:encode({finish, MsgID});
+                    requeue ->
+                        ensq_proto:encode({requeue, MsgID})
                 end;
             <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
                 ensq_proto:encode(nop);
             <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
                 C:response(ensq_proto:decode(Msg)),
                 <<>>;
-            <<?FRAME_TYPE_ERROR:32/integer, Data/binary>> ->
-                case ensq_proto:decode(Data) of
-                    #message{message_id=MsgID, message=Msg} ->
-                        case C:message(Msg) of
-                            ok ->
-                                ensq_proto:encode({finish, MsgID});
-                            O ->
-                                lager:warning("[channel|~p] ~p -> Not finishing ~s",
-                                              [O, C, MsgID]),
-                                <<>>
-                        end
+            <<?FRAME_TYPE_ERROR:32/integer, _Timestamp:64/integer,
+              _Attempt:16/integer, MsgID:16/binary, Msg/binary>> ->
+                case C:message(Msg) of
+                    ok ->
+                        ensq_proto:encode({finish, MsgID});
+                    O ->
+                        lager:warning("[channel|~p] ~p -> Not finishing ~s",
+                                      [O, C, MsgID]),
+                        <<>>
                 end;
             Msg ->
                 lager:warning("[channel|~p] Unknown message ~p.",
