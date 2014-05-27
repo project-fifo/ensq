@@ -105,11 +105,14 @@ loop(State) ->
             gen_tcp:send(State#state.socket, ensq_proto:encode(close)),
             terminate(State);
         {ready, 0} ->
-            erlang:apply_after(?RECHECK_INTERVAL, ensq_in_flow_manager, getrc),
+            erlang:send_after(?RECHECK_INTERVAL, self(), ready_rc),
             loop(State#state{ready_count = 0, current_ready_count=0});
         {ready, N} ->
             gen_tcp:send(State#state.socket, ensq_proto:encode({ready, N})),
             loop(State#state{ready_count = N, current_ready_count=N});
+        ready_rc ->
+            ensq_in_flow_manager:getrc(),
+            loop(State);
         {tcp, S, Data} ->
             #state{socket=S, buffer=B, ready_count=RC,
                    current_ready_count = CRC, cstate=CState} = State,
