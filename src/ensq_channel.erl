@@ -11,11 +11,7 @@
 -include("ensq.hrl").
 
 %% API
--export([open/5, ready/2,
-         recheck_ready_count/0,
-         recheck_ready/1,
-         recheck_ready_count/1,
-         close/1]).
+-export([open/5, ready/2, close/1]).
 
 %% gen_server callbacks
 -export([init/7]).
@@ -51,15 +47,6 @@ open(Host, Port, Topic, Channel, Handler) ->
 
 ready(Pid, N) ->
     Pid ! {ready, N}.
-
-recheck_ready_count() ->
-    recheck_ready_count(self()).
-
-recheck_ready_count(Pid) ->
-    erlang:send_after(?RECHECK_INTERVAL, Pid, recheck_ready).
-
-recheck_ready(Pid) ->
-    Pid ! recheck_ready.
 
 close(Pid) ->
     Pid ! close.
@@ -117,21 +104,11 @@ loop(State) ->
             gen_tcp:send(State#state.socket, ensq_proto:encode(close)),
             terminate(State);
         {ready, 0} ->
-            recheck_ready_count(),
+            erlang:apply_after(?RECHECK_INTERVAL, ensq_in_flow_manager, getrc),
             loop(State#state{ready_count = 0, current_ready_count=0});
         {ready, N} ->
             gen_tcp:send(State#state.socket, ensq_proto:encode({ready, N})),
             loop(State#state{ready_count = N, current_ready_count=N});
-        recheck_ready ->
-            State1 = case ensq_in_flow_manager:getrc() of
-                         {ok, 0} ->
-                             recheck_ready_count(),
-                             State;
-                         {ok, N} ->
-                             gen_tcp:send(State#state.socket, ensq_proto:encode({ready, N})),
-                             State#state{current_ready_count = N, ready_count=N}
-                     end,
-            loop(State1);
         {tcp, S, Data} ->
             #state{socket=S, buffer=B, ready_count=RC,
                    current_ready_count = CRC, cstate=CState} = State,
