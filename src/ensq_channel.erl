@@ -197,7 +197,7 @@ data(<<Size:32/integer, Raw:Size/binary, Rest/binary>>, RC,
                 <<>>;
             <<?FRAME_TYPE_ERROR:32/integer, _Timestamp:64/integer,
               _Attempt:16/integer, MsgID:16/binary, Msg/binary>> ->
-                case C:message(Msg) of
+                case C:error(Msg) of
                     ok ->
                         ensq_proto:encode({finish, MsgID});
                     O ->
