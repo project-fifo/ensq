@@ -92,6 +92,7 @@ init(From, Ref, Host, Port, Topic, Channel, Handler) ->
             {ok, CState} = Handler:init(),
             State = #state{socket = S, buffer = <<>>, handler = Handler,
                            cstate = CState},
+            ensq_in_flow_manager:getrc(),
             loop(State);
         E ->
             lager:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
