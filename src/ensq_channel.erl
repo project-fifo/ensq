@@ -29,7 +29,7 @@
 -define(FRAME_TYPE_MESSAGE, 2).
 
 -record(state, {socket, buffer, current_ready_count=1,
-                ready_count=1, handler=ensq_debug_callback}).
+                ready_count=1, handler=ensq_debug_callback, cstate}).
 
 %%%===================================================================
 %%% API
@@ -102,7 +102,9 @@ init(From, Ref, Host, Port, Topic, Channel, Handler) ->
 
             lager:debug("[~s:~p] Done initializing.~n", [Host, Port]),
             From ! {Ref, ok},
-            State = #state{socket = S, buffer = <<>>, handler = Handler},
+            {ok, CState} = Handler:init(),
+            State = #state{socket = S, buffer = <<>>, handler = Handler,
+                           cstate = CState},
             loop(State);
         E ->
             lager:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
@@ -132,8 +134,8 @@ loop(State) ->
             loop(State1);
         {tcp, S, Data} ->
             #state{socket=S, buffer=B, ready_count=RC,
-                   current_ready_count = CRC} = State,
-            State1 = data(<<B/binary, Data/binary>>, CRC, State, <<>>),
+                   current_ready_count = CRC, cstate=CState} = State,
+            State1 = data(<<B/binary, Data/binary>>, CRC, State, CState, <<>>),
             State2 = case State1#state.current_ready_count of
                          N when N < (RC / 4) ->
                              %% We don't want to ask for a propper new RC every time
@@ -179,39 +181,39 @@ terminate(_State = #state{socket=S}) ->
 
 
 data(<<Size:32/integer, Raw:Size/binary, Rest/binary>>, RC,
-     State = #state{socket = S,handler = C}, Replies) ->
-    Reply =
+     State = #state{socket = S,handler = C}, CState, Replies) ->
+    {Reply, CStateNew} =
         case Raw of
             <<?FRAME_TYPE_MESSAGE:32/integer, _Timestamp:64/integer,
               _Attempt:16/integer, MsgID:16/binary, Msg/binary>> ->
-                case C:message(Msg, {S, MsgID}) of
-                    ok ->
-                        ensq_proto:encode({finish, MsgID});
-                    requeue ->
-                        ensq_proto:encode({requeue, MsgID})
+                case C:message(Msg, {S, MsgID}, CState) of
+                    {ok, CState1} ->
+                        {ensq_proto:encode({finish, MsgID}), CState1};
+                    {requeue, CState1} ->
+                        {ensq_proto:encode({requeue, MsgID}), CState1}
                 end;
             <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
-                ensq_proto:encode(nop);
+                {ensq_proto:encode(nop), CState};
             <<?FRAME_TYPE_RESPONSE:32/integer, Msg/binary>> ->
-                C:response(ensq_proto:decode(Msg)),
-                <<>>;
+                {ok, CState1} = C:response(ensq_proto:decode(Msg), CState),
+                {<<>>, CState1};
             <<?FRAME_TYPE_ERROR:32/integer, _Timestamp:64/integer,
               _Attempt:16/integer, MsgID:16/binary, Msg/binary>> ->
-                case C:error(Msg) of
-                    ok ->
-                        ensq_proto:encode({finish, MsgID});
-                    O ->
+                case C:error(Msg, CState) of
+                    {ok, CState1} ->
+                        {ensq_proto:encode({finish, MsgID}), CState1};
+                    {O, CState1} ->
                         lager:warning("[channel|~p] ~p -> Not finishing ~s",
                                       [O, C, MsgID]),
-                        <<>>
+                        {<<>>, CState1}
                 end;
             Msg ->
                 lager:warning("[channel|~p] Unknown message ~p.",
                               [C, Msg]),
-                <<>>
+                {<<>>, CState}
         end,
-    data(Rest, RC - 1, State, <<Replies/binary, Reply/binary>>);
+    data(Rest, RC - 1, State, CStateNew, <<Replies/binary, Reply/binary>>);
 
-data(Rest, RC, State, Reply) ->
+data(Rest, RC, State, CState, Reply) ->
     gen_tcp:send(State#state.socket, Reply),
-    State#state{buffer=Rest, current_ready_count=RC - 1}.
+    State#state{buffer=Rest, current_ready_count=RC - 1, cstate=CState}.

@@ -2,14 +2,20 @@
 
 -behaviour(ensq_channel_behaviour).
 
--export([response/1, message/2, error/1]).
+-export([init/0, response/2, message/3, error/2]).
 
-response(Msg) ->
-    io:format("[response]  ~p~n", [Msg]).
+init() ->
+    {ok, undefined}.
 
-error(Msg) ->
-    io:format("[error]  ~p~n", [Msg]).
+response(Msg, State) ->
+    io:format("[response]  ~p~n", [Msg]),
+    {ok, State}.
 
-message(Msg, _) ->
-    io:format("[message]  ~p~n", [Msg]).
+error(Msg, State) ->
+    io:format("[error]  ~p~n", [Msg]),
+    {ok, State}.
+
+message(Msg, _, State) ->
+    io:format("[message]  ~p~n", [Msg]),
+    {ok, State}.
 

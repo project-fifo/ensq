@@ -1,9 +1,13 @@
 -module(ensq_channel_behaviour).
 
--callback response(Msg::binary()) ->
-    ok.
--callback error(Msg::binary()) ->
-    ok | {error, Reason::term()}.
+-callback init() ->
+    {ok, State::term()}.
 
--callback message(Msg::binary(), TouchFn::fun(() -> ok | {error, term()})) ->
-    ok | requeue.
+-callback response(Msg::binary(), State::term()) ->
+    {ok, State::term()}.
+
+-callback error(Msg::binary(), State::term()) ->
+    {ok, State::term()} | {error, Reason::term()}.
+
+-callback message(Msg::binary(), TouchFn::{term(), binary()}, State::term()) ->
+    {ok, State::term()} | {requeue, State::term()}.
