@@ -63,7 +63,7 @@ encode({publish, Topic, [_E | _] = Messages})
     Body = <<Count:32, Data/binary>>,
     <<"MPUB ", Topic/binary, $\n, (byte_size(Body)):32, Body/binary>>;
 encode({ready, N})
-  when is_integer(N), N > 0 ->
+  when is_integer(N), N >= 0 ->
     <<"RDY ", (i2b(N))/binary, $\n>>;
 encode({finish, MsgID})
   when is_binary(MsgID) ->
@@ -75,10 +75,7 @@ encode({requeue, MsgID, Timeout})
     <<"REQ ", MsgID/binary, $ , (i2b(Timeout))/binary, $\n>>;
 encode({touch, MsgID})
   when is_binary(MsgID) ->
-    <<"TOUCH ", MsgID/binary, $\n>>;
-encode(_) ->
-    {error, invalid}.
-
+    <<"TOUCH ", MsgID/binary, $\n>>.
 
 i2b(I) ->
     list_to_binary(integer_to_list(I)).
