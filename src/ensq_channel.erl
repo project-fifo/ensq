@@ -170,8 +170,8 @@ data(<<Size:32/integer, Raw:Size/binary, Rest/binary>>, RC,
                 case C:message(Msg, {S, MsgID}, CState) of
                     {ok, CState1} ->
                         {ensq_proto:encode({finish, MsgID}), CState1};
-                    {requeue, CState1} ->
-                        {ensq_proto:encode({requeue, MsgID}), CState1}
+                    {requeue, CState1, Timeout} ->
+                        {ensq_proto:encode({requeue, MsgID, Timeout}), CState1}
                 end;
             <<?FRAME_TYPE_RESPONSE:32/integer, "_heartbeat_">> ->
                 {ensq_proto:encode(nop), CState};

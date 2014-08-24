@@ -8,6 +8,8 @@
 
 
 -export_type([
+              host/0,
+              channel/0,
               topic_name/0,
               channel_name/0
              ]).

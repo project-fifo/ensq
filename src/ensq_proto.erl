@@ -50,7 +50,7 @@ encode({identify, #identity{} = I}) ->
     <<"IDENTIFY\n", (byte_size(JSON)):32, JSON/binary>>;
 encode({subscribe, Topic, Channel})
   when is_binary(Channel), is_binary(Topic) ->
-    <<"SUB ", Topic/binary, $ , Channel/binary, $\n>>;
+    <<"SUB ", Topic/binary, $\s, Channel/binary, $\n>>;
 encode({publish, Topic, Data})
   when is_binary(Topic),
        is_binary(Data) ->
@@ -72,13 +72,13 @@ encode({requeue, MsgID, Timeout})
   when is_binary(MsgID),
        is_integer(Timeout),
        Timeout >= 0 ->
-    <<"REQ ", MsgID/binary, $ , (i2b(Timeout))/binary, $\n>>;
+    <<"REQ ", MsgID/binary, $\s, (i2b(Timeout))/binary, $\n>>;
 encode({touch, MsgID})
   when is_binary(MsgID) ->
     <<"TOUCH ", MsgID/binary, $\n>>.
 
 i2b(I) ->
-    list_to_binary(integer_to_list(I)).
+    integer_to_binary(I).
 identity_to_json(#identity{} = I) ->
     J = ?IDENTITY_FIELD_OPT(short_id, []),
     J0 = ?IDENTITY_FIELD_OPT(long_id, J),

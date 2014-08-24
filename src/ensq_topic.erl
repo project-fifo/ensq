@@ -59,7 +59,7 @@ get_info(Pid) ->
 add_channel(Topic, Channel, Handler) ->
     gen_server:cast(Topic, {add_channel, Channel, Handler}).
 
--spec discover(Topic :: ensq:topic_name(), Hosts :: [ensq:hosts()],
+-spec discover(Topic :: ensq:topic_name(), Hosts :: [ensq:host()],
                Channels :: [ensq:channel()]) -> {ok, Pid :: pid()}.
 
 discover(Topic, Hosts, Channels) ->

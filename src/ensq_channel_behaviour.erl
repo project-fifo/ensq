@@ -10,4 +10,4 @@
     {ok, State::term()} | {error, Reason::term()}.
 
 -callback message(Msg::binary(), TouchFn::{term(), binary()}, State::term()) ->
-    {ok, State::term()} | {requeue, State::term()}.
+    {ok, State::term()} | {requeue, State::term(), Timeout::non_neg_integer()}.
