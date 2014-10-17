@@ -224,10 +224,10 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                     #message{message_id=MsgID, message=Msg} ->
                         gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
                         gen_server:reply(From, Msg),
-                        {State, State#state{from = F1}};
+                        {state, State#state{from = F1}};
                     Msg ->
                         gen_server:reply(From, Msg),
-                        {State, State#state{from = F1}}
+                        {state, State#state{from = F1}}
                 end;
             <<1:32/integer, Data/binary>> ->
                 case ensq_proto:decode(Data) of
@@ -243,21 +243,21 @@ data(State = #state{buffer = <<Size:32/integer, Raw:Size/binary, Rest/binary>>,
                     #message{message_id=MsgID, message=Msg} ->
                         gen_tcp:send(S, ensq_proto:encode({finish, MsgID})),
                         gen_server:reply(From, Msg),
-                        {State, State#state{from = F1}};
+                        {state, State#state{from = F1}};
                     Msg ->
                         gen_server:reply(From, Msg),
-                        {State, State#state{from = F1}}
+                        {state, State#state{from = F1}}
                 end;
             Msg ->
                 lager:warning("[unknown] ~p~n", [Msg])
         end,
     State1 = case R of
-                 {state, S} ->
-                     S#state{buffer=Rest};
+                 {state, StateX} ->
+                     StateX#state{buffer=Rest};
                  _ ->
-                     S#state{buffer=Rest}
+                     State#state{buffer=Rest}
              end,
-    data(State1#state{buffer=Rest});
+    data(State1);
 
 data(State) ->
     State.
