@@ -141,7 +141,6 @@ handle_cast({send, From, Msg}, State=#state{socket=S, topic=Topic, from = F}) ->
         S1 ->
             case gen_tcp:send(S1, ensq_proto:encode({publish, Topic, Msg})) of
                 ok ->
-                    gen_server:reply(From, ok),
                     {noreply, State1#state{from = queue:in(From, F)}};
                 E ->
                     lager:warning("[~s] Ooops: ~p~n", [Topic, E]),
