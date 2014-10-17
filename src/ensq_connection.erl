@@ -134,14 +134,14 @@ handle_cast({send, From, Msg}, State=#state{socket=S, topic=Topic}) ->
                  _ ->
                      State
              end,
-    S1 = State1#state.socket,
-    case S1 of
+    case State1#state.socket of
         undefined ->
             gen_server:reply(From, {error, not_connected}),
             {noreply, State1};
-        _ ->
+        S1 ->
             case gen_tcp:send(S1, ensq_proto:encode({publish, Topic, Msg})) of
                 ok ->
+                    gen_server:reply(From, ok),
                     {noreply, State1#state{from = From}};
                 E ->
                     lager:warning("[~s] Ooops: ~p~n", [Topic, E]),
