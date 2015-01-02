@@ -127,26 +127,19 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
+
+handle_cast({send, From, Msg}, State=#state{socket=undefined}) ->
+    handle_cast({send, From, Msg}, connect(State));
+
+
 handle_cast({send, From, Msg}, State=#state{socket=S, topic=Topic, from = F}) ->
-    State1 = case S of
-                 undefined ->
-                     connect(State);
-                 _ ->
-                     State
-             end,
-    case State1#state.socket of
-        undefined ->
-            gen_server:reply(From, {error, not_connected}),
-            {noreply, State1};
-        S1 ->
-            case gen_tcp:send(S1, ensq_proto:encode({publish, Topic, Msg})) of
-                ok ->
-                    {noreply, State1#state{from = queue:in(From, F)}};
-                E ->
-                    lager:warning("[~s] Ooops: ~p~n", [Topic, E]),
-                    gen_server:reply(From, E),
-                    {noreply, connect(State1)}
-            end
+    case gen_tcp:send(S, ensq_proto:encode({publish, Topic, Msg})) of
+        ok ->
+            {noreply, State#state{from = queue:in(From, F)}};
+        E ->
+            lager:warning("[~s] Ooops: ~p~n", [Topic, E]),
+            gen_server:reply(From, E),
+            {noreply, connect(State)}
     end;
 
 handle_cast(_Msg, State) ->
