@@ -1,21 +1,15 @@
-{application, ensq,
- [
-  {description, "Erlang client for NSQ"},
-  {vsn, "0.1.5"},
-  {registered, []},
-  {applications, [
-                  kernel,
-                  inets,
-                  stdlib,
-                  lager
-                 ]},
-  {mod, { ensq_app, []}},
-  {env, [
-         {max_in_flight, 300},
-         {discover_interval, 60000},
-         {discover_jitter, 10},
-         {max_retry_delay, 10000},
-         {retry_inital, 1000},
-         {retry_inc_type, linear}
-        ]}
- ]}.
+{application,ensq,
+             [{description,"Erlang client for NSQ"},
+              {vsn,"0.1.6"},
+              {registered,[]},
+              {applications,[kernel,inets,stdlib,jsxd,jsx,lager]},
+              {mod,{ensq_app,[]}},
+              {env,[{max_in_flight,300},
+                    {discover_interval,60000},
+                    {discover_jitter,10},
+                    {max_retry_delay,10000},
+                    {retry_inital,1000},
+                    {retry_inc_type,linear}]},
+              {contributors,["Heinz N. Gies"]},
+              {licenses,["CDDL"]},
+              {links,[{"Github","https://github.com/project-fifo/ensq"}]}]}.
