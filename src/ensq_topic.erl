@@ -284,7 +284,7 @@ handle_cast(tick, State = #state{
                     end, State, Hosts),
     %% Add +/- 10% Jitter for the next discovery
     D = round(I/State#state.jitter),
-    T = I + random:uniform(D*2) - D,
+    T = I + rand:uniform(D*2) - D,
     timer:apply_after(T, ensq_topic, tick, [self()]),
     {noreply, State1#state{ref2srv = build_ref2srv(State1#state.servers)}};
 

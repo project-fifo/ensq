@@ -1,6 +1,6 @@
 {application,ensq,
              [{description,"Erlang client for NSQ"},
-              {vsn,"0.1.6"},
+              {vsn,"0.1.7"},
               {registered,[]},
               {applications,[kernel,inets,stdlib,jsxd,jsx,lager]},
               {mod,{ensq_app,[]}},
@@ -10,6 +10,6 @@
                     {max_retry_delay,10000},
                     {retry_inital,1000},
                     {retry_inc_type,linear}]},
-              {contributors,["Heinz N. Gies"]},
+              {maintainers,["Heinz N. Gies"]},
               {licenses,["CDDL"]},
               {links,[{"Github","https://github.com/project-fifo/ensq"}]}]}.

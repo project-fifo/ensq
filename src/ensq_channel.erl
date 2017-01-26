@@ -122,7 +122,7 @@ loop(State) ->
                              %% We don't want to ask for a propper new RC every time
                              %% this keeps the laod of the flow manager by guessing
                              %% we'll get the the same value back anyway.
-                             case random:uniform(10) of
+                             case rand:uniform(10) of
                                  10 ->
                                      ensq_in_flow_manager:getrc();
                                  _ ->
