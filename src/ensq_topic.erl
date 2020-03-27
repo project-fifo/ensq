@@ -398,7 +398,7 @@ http_get(URL) ->
             error
     end.
 
-down_ref(_, Ref, [{_, _, _, Ref, _}], _) ->
+down_ref(_, Ref, [{_, _, _, Ref}], _) ->
     delete;
 down_ref(_, _, [], _) ->
     delete;
