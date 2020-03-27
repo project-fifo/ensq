@@ -356,7 +356,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 add_discovered(JSON, State) ->
-    {ok, Producers} = jsxd:get([<<"data">>, <<"producers">>], JSON),
+    {ok, Producers} = jsxd:get([<<"producers">>], JSON),
     Producers1 = [get_host(P) || P <- Producers],
     lists:foldl(fun add_host/2, State, Producers1).
 
@@ -391,7 +391,7 @@ get_host(Producer) ->
     {binary_to_list(Addr), Port}.
 
 http_get(URL) ->
-    case httpc:request(get, {URL,[]}, [], [{body_format, binary}]) of
+    case httpc:request(get, {URL,[{"Accept", "application/vnd.nsq; version=1.0"}]}, [], [{body_format, binary}]) of
         {ok,{{_,200,_}, _, Body}} ->
             {ok, jsx:decode(Body)};
         _ ->
