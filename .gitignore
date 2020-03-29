@@ -8,3 +8,4 @@ erl_crash.dump
 _build
 tags
 rebar3
+TEST-file_ensq.app.xml
