@@ -41,8 +41,6 @@ start() ->
     application:start(inets),
     application:start(syntax_tools),
     application:start(compiler),
-    application:start(goldrush),
-    application:start(lager),
     application:start(ensq).
 
 %%--------------------------------------------------------------------

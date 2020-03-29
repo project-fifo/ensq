@@ -2,7 +2,7 @@
              [{description,"Erlang client for NSQ"},
               {vsn,"0.1.7"},
               {registered,[]},
-              {applications,[kernel,inets,stdlib,jsxd,jsx,lager]},
+              {applications,[kernel,inets,stdlib,jsxd,jsx]},
               {mod,{ensq_app,[]}},
               {env,[{max_in_flight,300},
                     {discover_interval,60000},

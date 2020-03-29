@@ -10,6 +10,12 @@ This library implements a client to the [NSQ Messaging Queue](http://bitly.githu
 - Protocol negation with `IDENTIFY`.
 	- max_ready_count delegation from the server.
 
+### OTP Compatibility
+
+OTP 21.0 or above is required since 0.3.0,
+If you need a version of ensq which runs on an older OTP release,
+we suggest you use ensq 0.2.0.
+
 ### Design
 The Erlang process model fits the nsq client concept quite well so:
  - The top level 'process' are one (or more) topics and discovery server combinations.
@@ -19,25 +25,25 @@ The Erlang process model fits the nsq client concept quite well so:
 	 	- Each `PUB` host spawns one sender.
 	 	- Messages are send in a round robin principle.
 	 	- Messages to host groups are send to all members.
-	 	
+
 
 ```
                                  topic*
-                                 /     \ 
+                                 /     \
                                 /       \
                                /         \
                               /           \
                       discovery_server     \
                            /    \           \
                           /      \          target*(PUB)
-                         /        \         
-                        /          \       
+                         /        \
+                        /          \
                       server      server2
                        / \          |
                       /   \         |
                      |     |        |
                  channel* channel* channel*
-                  
+
 
 * - seperate process
 ```
@@ -45,7 +51,7 @@ The Erlang process model fits the nsq client concept quite well so:
 ### API
 
 #### Using `ensq:init`
-One way to connect to nsq is using 
+One way to connect to nsq is using
 
 #### Setting up topics separately
 ```
