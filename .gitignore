@@ -6,3 +6,5 @@ ebin
 .eunit
 erl_crash.dump
 _build
+tags
+rebar3
