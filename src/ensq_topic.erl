@@ -216,7 +216,7 @@ handle_call(get_info, _From, State =
     {reply, Reply, State};
 
 handle_call(Req, _From, State) ->
-    lager:warning("Unknown message: ~p~n", [Req]),
+    logger:warning("Unknown message: ~p~n", [Req]),
     Reply = ok,
     {reply, Reply, State}.
 
@@ -240,7 +240,7 @@ handle_cast({retry, {Host, Port}, Channel, Handler, Retry},
             Ss1 = orddict:append({Host, Port}, Entry, Ss),
             {noreply, State#state{servers = Ss1, ref2srv = build_ref2srv(Ss1)}};
         E ->
-            lager:warning("Retry ~p of connection ~s:~p failed with ~p.~n",
+            logger:warning("Retry ~p of connection ~s:~p failed with ~p.~n",
                           [Retry, Host, Port, E]),
             retry({Host, Port}, Channel, Handler, Retry+1, Rule),
             {noreply, State}
@@ -255,7 +255,7 @@ handle_cast({add_channel, Channel, Handler},
                             Ref = erlang:monitor(process, Pid),
                             [{Pid, Channel, Topic, Handler, Ref}| Pids];
                         E ->
-                            lager:warning("Failed opening channel: ~p~n", [E]),
+                            logger:warning("Failed opening channel: ~p~n", [E]),
                             Pids
                     end
             end, Ss),

@@ -8,14 +8,14 @@ init() ->
     {ok, undefined}.
 
 response(Msg, State) ->
-    io:format("[response]  ~p~n", [Msg]),
+    logger:debug("[response]  ~p~n", [Msg]),
     {ok, State}.
 
 error(Msg, State) ->
-    io:format("[error]  ~p~n", [Msg]),
+    logger:debug("[error]  ~p~n", [Msg]),
     {ok, State}.
 
 message(Msg, _, State) ->
-    io:format("[message]  ~p~n", [Msg]),
+    logger:debug("[message]  ~p~n", [Msg]),
     {ok, State}.
 

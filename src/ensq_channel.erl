@@ -70,24 +70,24 @@ init(From, Ref, Host, Port, Topic, Channel, Handler) ->
     Opts = [{active, false}, binary, {deliver, term}, {packet, raw}],
     case gen_tcp:connect(Host, Port, Opts) of
         {ok, S} ->
-            lager:debug("[channel|~s:~p] connected.~n", [Host, Port]),
+            logger:debug("[channel|~s:~p] connected.~n", [Host, Port]),
 
-            lager:debug("[channel|~s:~p] Sending version.~n", [Host, Port]),
+            logger:debug("[channel|~s:~p] Sending version.~n", [Host, Port]),
             gen_tcp:send(S, ensq_proto:encode(version)),
 
-            lager:debug("[channel|~s:~p] Subscribing to ~s/~s.~n",
+            logger:debug("[channel|~s:~p] Subscribing to ~s/~s.~n",
                         [Host, Port, Topic, Channel]),
             gen_tcp:send(S, ensq_proto:encode({subscribe, Topic, Channel})),
 
-            lager:debug("[channel|~s:~p] Waiting for ack.~n", [Host, Port]),
+            logger:debug("[channel|~s:~p] Waiting for ack.~n", [Host, Port]),
             {ok, <<0,0,0,6,0,0,0,0,79,75>>} = gen_tcp:recv(S, 0),
-            lager:debug("[channel|~s:~p] Got ack changing to active mode!~n", [Host, Port]),
+            logger:debug("[channel|~s:~p] Got ack changing to active mode!~n", [Host, Port]),
             inet:setopts(S, [{active, true}]),
 
-            lager:debug("[channel|~s:~p] Setting Ready state to 1.~n", [Host, Port]),
+            logger:debug("[channel|~s:~p] Setting Ready state to 1.~n", [Host, Port]),
             gen_tcp:send(S, ensq_proto:encode({ready, 1})),
 
-            lager:debug("[~s:~p] Done initializing.~n", [Host, Port]),
+            logger:debug("[~s:~p] Done initializing.~n", [Host, Port]),
             From ! {Ref, ok},
             {ok, CState} = Handler:init(),
             State = #state{socket = S, buffer = <<>>, handler = Handler,
@@ -95,7 +95,7 @@ init(From, Ref, Host, Port, Topic, Channel, Handler) ->
             ensq_in_flow_manager:getrc(),
             loop(State);
         E ->
-            lager:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
+            logger:error("[channel|~s:~p] Error: ~p~n", [Host, Port, E]),
             From ! {Ref, E}
     end.
 
@@ -138,7 +138,7 @@ loop(State) ->
         {tcp_closed, S} when S =:= State#state.socket ->
             terminate(State);
         Info ->
-            lager:warning("Unknown message: ~p~n", [Info]),
+            logger:warning("Unknown message: ~p~n", [Info]),
             loop(State)
     end.
 
@@ -184,12 +184,12 @@ data(<<Size:32/integer, Raw:Size/binary, Rest/binary>>, RC,
                     {ok, CState1} ->
                         {ensq_proto:encode({finish, MsgID}), CState1};
                     {O, CState1} ->
-                        lager:warning("[channel|~p] ~p -> Not finishing ~s",
+                        logger:warning("[channel|~p] ~p -> Not finishing ~s",
                                       [O, C, MsgID]),
                         {<<>>, CState1}
                 end;
             Msg ->
-                lager:warning("[channel|~p] Unknown message ~p.",
+                logger:warning("[channel|~p] Unknown message ~p.",
                               [C, Msg]),
                 {<<>>, CState}
         end,
