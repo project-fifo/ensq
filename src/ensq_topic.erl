@@ -355,8 +355,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%% Internal functions
 %%%===================================================================
 
-add_discovered(JSON, State) ->
-    {ok, Producers} = jsxd:get([<<"producers">>], JSON),
+add_discovered(#{<<"producers">> := Producers}, State) ->
     Producers1 = [get_host(P) || P <- Producers],
     lists:foldl(fun add_host/2, State, Producers1).
 
@@ -385,15 +384,13 @@ build_ref2srv([{Srv, [{_, _, _, Ref} | RR]} | R], Acc) ->
     build_ref2srv([{Srv, RR} | R], [{Ref, Srv} | Acc]).
 
 
-get_host(Producer) ->
-    {ok, Addr} = jsxd:get(<<"broadcast_address">>, Producer),
-    {ok, Port} = jsxd:get(<<"tcp_port">>, Producer),
+get_host(#{<<"broadcast_address">> := Addr, <<"tcp_port">> := Port}) ->
     {binary_to_list(Addr), Port}.
 
 http_get(URL) ->
     case httpc:request(get, {URL,[{"Accept", "application/vnd.nsq; version=1.0"}]}, [], [{body_format, binary}]) of
         {ok,{{_,200,_}, _, Body}} ->
-            {ok, jsx:decode(Body)};
+            {ok, jsx:decode(Body, [return_maps])};
         _ ->
             error
     end.
