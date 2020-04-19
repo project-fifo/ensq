@@ -187,7 +187,7 @@ build_opts([], State) ->
 %% @end
 %%--------------------------------------------------------------------
 handle_call(stop, _From, State) ->
-    {stop, normal, State};
+    {stop, normal, ok, State};
 
 handle_call({send, _}, _From, State = #state{targets = [], targets_rev = []}) ->
     {reply, {error, not_connected}, State};
